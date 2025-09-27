@@ -1,0 +1,27 @@
+# Core
+requests
+
+# สำหรับ API server (ถ้าอยากขยาย)
+fastapi
+uvicorn
+
+# Speech-to-Text (Whisper)
+openai-whisper
+sounddevice
+
+# Text-to-Speech (TTS)
+pyttsx3
+TTS
+
+# Keyboard / Mouse Control
+pyautogui
+pynput
+
+# OCR / Screen Reader
+pytesseract
+mss
+opencv-python
+
+# Utils
+numpy
+Pillow

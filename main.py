@@ -6,30 +6,34 @@
 # -------------------------
 
 from core.llm_client import LLMClient
+from core.stt_client import STTClient
 
 def main():
-    # สร้าง object ของ LLMClient สำหรับติดต่อ LM Studio
     llm = LLMClient()
+    stt = STTClient(model_size="tiny", language="th")
 
     print("=== AI Assistant (Gemma3 4B Q6_K via LM Studio) ===")
-    print("พิมพ์ exit หรือ quit เพื่อออกจากโปรแกรม\n")
+    print("พิมพ์ข้อความ หรือกด Enter ว่าง ๆ เพื่อพูด (พูด 5 วิ)")
+    print("พิมพ์ exit/quit/q เพื่อออก\n")
 
     while True:
         try:
-            # รับข้อความจากผู้ใช้
-            user_input = input("คุณ: ")
+            user_input = input("คุณ (พิมพ์ข้อความหรือกด Enter เพื่อพูด): ")
 
-            # ถ้าผู้ใช้พิมพ์ exit/quit/q ให้ออกจาก loop
+            # ออกจากโปรแกรม
             if user_input.lower() in ["exit", "quit", "q"]:
                 break
 
-            # ส่งข้อความไปยังโมเดลแล้วรับคำตอบ
-            reply = llm.ask(user_input)
+            # ถ้า user ไม่พิมพ์ → ใช้เสียงแทน
+            if user_input.strip() == "":
+                user_input = stt.listen_once(duration=5)
 
-            # แสดงคำตอบ
+            if not user_input:
+                continue
+
+            reply = llm.ask(user_input)
             print("ผู้ช่วย:", reply)
 
-        # กด Ctrl+C เพื่อหยุดโปรแกรม
         except KeyboardInterrupt:
             print("\n[หยุดการทำงาน]")
             break
