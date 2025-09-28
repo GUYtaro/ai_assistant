@@ -25,3 +25,6 @@ opencv-python
 # Utils
 numpy
 Pillow
+
+
+pyttsx3
