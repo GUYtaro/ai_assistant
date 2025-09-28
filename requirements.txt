@@ -28,3 +28,5 @@ Pillow
 
 
 pyttsx3
+gTTS
+pydub

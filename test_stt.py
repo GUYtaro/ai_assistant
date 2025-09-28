@@ -1,13 +1,11 @@
-from core.tts_client import TTSClient
+from core.stt_client import STTClient
 
-tts = TTSClient(rate=170, volume=1.0)
+# สร้าง STTClient ใช้โมเดล Whisper (tiny) ภาษาไทย
+stt = STTClient(model_size="tiny", language="th")
 
-# แสดง voices ที่มีในระบบ
-voices = tts.list_voices()
-print("== Voice ที่มีในระบบ ==")
-for vid, vname in voices:
-    print(f"{vid} -> {vname}")
+print("🎤 กำลังอัดเสียง 5 วินาที... พูดได้เลยครับ")
 
-# ลองให้พูด
-tts.speak("สวัสดีครับ ยินดีที่ได้รู้จัก")
-tts.speak("Hello! This is a test for text to speech.")
+# อัดเสียงแล้วแปลงเป็นข้อความ
+text = stt.listen_once(duration=5)
+
+print("📝 คุณพูดว่า:", text)

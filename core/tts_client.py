@@ -1,91 +1,58 @@
 # core/tts_client.py
 # -------------------------
 # โมดูลสำหรับ Text-to-Speech (TTS)
-# *** ใช้ gTTS (Google TTS) และใช้ FFmpeg (ที่ติดตั้งแล้ว) ในการเล่นเสียง ***
+# ใช้ gTTS (Google Text-to-Speech) สร้างไฟล์เสียง .mp3
+# แล้วใช้ ffplay (จาก ffmpeg) เล่นไฟล์เสียง
 # -------------------------
 
-# ต้องติดตั้ง: pip install gTTS pydub
-
-from gtts import gTTS
 import os
 import tempfile
-import time
-
-# นำเข้าไลบรารีที่จำเป็นสำหรับการเล่นเสียงผ่าน FFmpeg
-try:
-    from pydub import AudioSegment
-    # pydub จะพึ่งพา FFmpeg ที่เราติดตั้งไปแล้วในการจัดการและเล่นไฟล์
-    TTS_PLAYBACK_READY = True
-except ImportError:
-    print("[TTS ERROR] กรุณาติดตั้งไลบรารี: pip install gTTS pydub")
-    TTS_PLAYBACK_READY = False
-except Exception as e:
-    # ข้อผิดพลาดนี้อาจเกิดจากหา FFmpeg ไม่เจอ แม้จะติดตั้ง pydub แล้ว
-    print(f"[TTS ERROR] ข้อผิดพลาดในการโหลดไลบรารีเสียง หรือ FFmpeg: {e}")
-    TTS_PLAYBACK_READY = False
-
-
+from gtts import gTTS   # ไลบรารี gTTS ใช้สร้างไฟล์เสียงจากข้อความ
+import subprocess       # ใช้รันคำสั่งภายนอก (เรียก ffplay เล่นเสียง)
+"" ""
 class TTSClient:
-    def __init__(self, rate=180, volume=1.0, preferred_voice_id=None):
+    def __init__(self, lang="th", slow=False):
         """
-        gTTS ใช้ภาษาไทยได้เลยโดยไม่ต้องตั้งค่า voice ID
+        lang: กำหนดภาษาที่จะให้พูด (เช่น "th" = ไทย, "en" = อังกฤษ)
+        slow: ถ้า True จะพูดช้าลง
         """
-        print("[TTS Client] ใช้ gTTS: รองรับภาษาไทย (ใช้ FFmpeg เล่นเสียง)")
-        self.temp_dir = tempfile.gettempdir()
-        # ใช้ชื่อไฟล์ที่ไม่ซ้ำกัน
-        self.temp_file = os.path.join(self.temp_dir, f"tts_output_{os.getpid()}.mp3")
-        self.wav_file = os.path.join(self.temp_dir, f"tts_output_{os.getpid()}.wav")
+        self.lang = lang
+        self.slow = slow
 
+    def speak(self, text):
+        """
+        ฟังก์ชันแปลงข้อความเป็นเสียง แล้วเล่นออกลำโพง
+        """
+        try:
+            # สร้างไฟล์ชั่วคราว (.mp3)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmpfile:
+                # ใช้ gTTS สร้างไฟล์เสียงจากข้อความ
+                tts = gTTS(text=text, lang=self.lang, slow=self.slow)
+                tts.save(tmpfile.name)  # บันทึกไฟล์เสียงลงไฟล์ชั่วคราว
+                tmpfile.close()
 
-    def _set_thai_voice_if_available(self):
-        """ฟังก์ชันนี้ถูกข้ามไปเนื่องจาก gTTS จัดการภาษาอัตโนมัติ"""
-        pass
+                # ใช้ ffplay (จาก ffmpeg) เล่นไฟล์เสียง
+                # -nodisp   : ไม่เปิดหน้าต่างวิดีโอ
+                # -autoexit : เล่นจบแล้วออกทันที
+                subprocess.run(
+                    ["ffplay", "-nodisp", "-autoexit", tmpfile.name],
+                    stdout=subprocess.DEVNULL,   # ซ่อน output ของ ffplay
+                    stderr=subprocess.DEVNULL
+                )
+
+                # ลบไฟล์ชั่วคราวทิ้ง
+                os.remove(tmpfile.name)
+
+        except Exception as e:
+            # ถ้ามี error ให้พิมพ์ออกมา
+            print(f"[TTS ERROR] {e}")
 
     def list_voices(self):
         """
-        สำหรับ gTTS จะคืนค่า voice เสมือนเพื่อแสดงว่ารองรับภาษาไทยแล้ว
+        ฟังก์ชันจำลอง (mock) สำหรับ list voices
+        จริง ๆ gTTS ไม่รองรับ voice หลายแบบ → return เฉพาะ th/en
         """
         return [
             ("gTTS_TH", "Google TTS - Thai (Internet Required)"),
             ("gTTS_EN", "Google TTS - English (Internet Required)")
         ]
-
-    def speak(self, text):
-        """
-        แปลงข้อความเป็นไฟล์ MP3, แปลงเป็น WAV ด้วย pydub/FFmpeg, และเล่นออกลำโพง
-        """
-        if not text:
-            return
-            
-        if not TTS_PLAYBACK_READY:
-            print("[TTS ERROR] ไม่สามารถเล่นเสียงได้: ไลบรารี pydub ยังไม่พร้อม")
-            return
-
-        print(f"[TTS] กำลังสร้างและพูด: {text}")
-        
-        try:
-            # 1. สร้างไฟล์ MP3 ด้วย gTTS
-            is_thai = any(c >= '\u0E00' and c <= '\u0E7F' for c in text)
-            lang = 'th' if is_thai else 'en'
-            
-            tts = gTTS(text=text, lang=lang)
-            tts.save(self.temp_file)
-            
-            # 2. โหลดไฟล์ MP3 และแปลงเป็น AudioSegment
-            audio = AudioSegment.from_mp3(self.temp_file)
-            
-            # 3. เล่นไฟล์เสียงโดยใช้ pydub (ซึ่งจะใช้ FFmpeg ที่ติดตั้งใน PATH)
-            # เราใช้ play() ของ pydub ซึ่งจะทำการแปลงและเล่นไฟล์
-            from pydub.playback import play
-            play(audio)
-            
-            # 4. ลบไฟล์ชั่วคราวหลังเล่นเสร็จ
-            os.remove(self.temp_file)
-            # หากมีการสร้างไฟล์ WAV ชั่วคราว (บางระบบ) ให้ลบด้วย
-            if os.path.exists(self.wav_file):
-                 os.remove(self.wav_file)
-
-        except Exception as e:
-            # มักเกิดจากไม่มีการเชื่อมต่ออินเทอร์เน็ต หรือ FFmpeg มีปัญหา
-            print(f"[TTS ERROR] ไม่สามารถสร้าง/เล่นเสียงได้: {e}")
-            print("กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต และการติดตั้ง FFmpeg")
