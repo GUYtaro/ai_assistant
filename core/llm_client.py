@@ -1,48 +1,78 @@
 # core/llm_client.py
 # -------------------------
-# โมดูลนี้ใช้สำหรับติดต่อกับ LM Studio ผ่าน API
-# โดยใช้ requests ส่งข้อความไปยังโมเดล LLM
-# และดึงคำตอบกลับมา
+# โมดูลสำหรับเชื่อมต่อกับ Large Language Model (LLM)
+# โดยใช้ LM Studio Server (รันบน localhost:1234) ผ่าน API
 # -------------------------
 
 import requests
-from config import LMSTUDIO_URL, MODEL_NAME
+import json
+# อิมพอร์ตการตั้งค่าจาก config.py (ตอนนี้มี MAX_TOKENS, TEMPERATURE)
+from config import LMSTUDIO_URL, MODEL_NAME, MAX_TOKENS, TEMPERATURE 
 
 class LLMClient:
-    def __init__(self, url=LMSTUDIO_URL, model=MODEL_NAME):
-        # เก็บค่า URL และชื่อโมเดล
-        self.url = url
-        self.model = model
-
-    def ask(self, prompt, temperature=0.7, max_tokens=256):
+    def __init__(self):
         """
-        ส่งข้อความ (prompt) ไปยังโมเดลที่รันบน LM Studio
-        แล้วคืนค่าข้อความตอบกลับจากโมเดล
+        ตั้งค่าไคลเอนต์สำหรับเชื่อมต่อกับ LM Studio
         """
-        # endpoint ของ LM Studio ที่ใช้ chat-completions
-        endpoint = f"{self.url}/chat/completions"
-        headers = {"Content-Type": "application/json"}
+        self.api_url = LMSTUDIO_URL
+        self.model_name = MODEL_NAME
+        self.max_tokens = MAX_TOKENS
+        self.temperature = TEMPERATURE
+        
+        print(f"[LLM Client] เชื่อมต่อกับ LM Studio ที่ {self.api_url}")
+        print(f"[LLM Client] ใช้โมเดล: {self.model_name}")
 
-        # payload ที่จะส่งไปยังโมเดล
+    def ask(self, prompt, history=[]): # ***ฟังก์ชันที่ถูกต้องคือ ask() และรับ history***
+        """
+        ส่งข้อความไปให้ LLM ประมวลผลและรับคำตอบกลับมา (รองรับ Chat History)
+        
+        Args:
+            prompt (str): ข้อความล่าสุดจากผู้ใช้
+            history (list): ประวัติการสนทนา (list of dictionaries)
+            
+        Returns:
+            str: คำตอบที่สร้างโดยโมเดล หรือข้อความแจ้งเตือนข้อผิดพลาด
+        """
+        
+        # System Message: กำหนดบุคลิกและบทบาทของ Assistant
+        messages = [{
+            "role": "system", 
+            "content": "คุณคือผู้ช่วย AI ที่เป็นมิตรและมีความรู้ ตอบคำถามด้วยภาษาไทยที่สุภาพและเข้าใจง่าย ตอบคำถามให้กระชับที่สุด"
+        }]
+        
+        # เพิ่มประวัติการสนทนาและคำถามล่าสุด
+        messages.extend(history)
+        messages.append({"role": "user", "content": prompt})
+
+        # สร้าง Payload สำหรับ API
         payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": "คุณคือผู้ช่วยที่ตอบเป็นภาษาไทย"},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": temperature,  # ค่าการสุ่ม (0 = เดาแน่นอน, 1 = สร้างสรรค์)
-            "max_tokens": max_tokens     # จำกัดจำนวน token ที่โมเดลตอบ
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
         }
 
-        # ส่ง request ไปยัง LM Studio
-        resp = requests.post(endpoint, headers=headers, json=payload)
+        # ส่ง Request ไปยัง LM Studio Server
+        try:
+            headers = {"Content-Type": "application/json"}
+            
+            # API endpoint สำหรับการสนทนาคือ /v1/chat/completions
+            # เพิ่ม timeout เพื่อป้องกันการรอนานเกินไป
+            response = requests.post(f"{self.api_url}/chat/completions", headers=headers, json=payload, timeout=60)
+            response.raise_for_status() # ตรวจสอบ Error HTTP
 
-        # ถ้าเกิด error ให้คืนข้อความ error กลับมา
-        if resp.status_code != 200:
-            return f"[ERROR] {resp.status_code}: {resp.text}"
+            # ประมวลผลคำตอบ
+            data = response.json()
+            
+            if data and data['choices']:
+                message = data['choices'][0]['message']
+                return message.get('content', '').strip()
+            
+            return "ขออภัยค่ะ โมเดลไม่ได้ให้คำตอบที่ชัดเจน"
 
-        # แปลง response ที่ได้เป็น JSON
-        data = resp.json()
-
-        # คืนค่าข้อความที่โมเดลตอบกลับ
-        return data["choices"][0]["message"]["content"]
+        except requests.exceptions.ConnectionError:
+            return "❌ เชื่อมต่อ LM Studio Server ไม่ได้ กรุณาตรวจสอบว่า LM Studio เปิดอยู่และรันโมเดลแล้วที่พอร์ต 1234"
+        except requests.exceptions.RequestException as e:
+            return f"❌ เกิดข้อผิดพลาดในการเรียก API: {e}"
+        except Exception as e:
+            return f"❌ เกิดข้อผิดพลาดที่ไม่รู้จัก: {e}"
