@@ -1,32 +1,29 @@
 # Core
 requests
 
-# สำหรับ API server (ถ้าอยากขยาย)
+# API Server
 fastapi
 uvicorn
 
-# Speech-to-Text (Whisper)
+# Speech-to-Text
 openai-whisper
 sounddevice
 
-# Text-to-Speech (TTS)
+# Text-to-Speech
 pyttsx3
 TTS
+gTTS
+pydub
 
-# Keyboard / Mouse Control
+# Input Control
 pyautogui
 pynput
 
-# OCR / Screen Reader
+# OCR / Screen Processing
 pytesseract
 mss
 opencv-python
 
-# Utils
+# Utilities
 numpy
 Pillow
-
-
-pyttsx3
-gTTS
-pydub
