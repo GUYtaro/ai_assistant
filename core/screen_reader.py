@@ -1,53 +1,62 @@
 # core/screen_reader.py
 # -------------------------
-# ถ่ายภาพหน้าจอ (full-screen หรือ region) และแปลงเป็นข้อความด้วย pytesseract
-# ใช้ mss สำหรับ screenshot ที่เร็ว และ PIL (Pillow) สำหรับแปลงภาพ
-# ต้องติดตั้ง tesseract และตั้งค่า TESSERACT_CMD ใน config.py
+# โมดูลนี้ทำหน้าที่เป็น "Screen Reader" เบื้องต้น
+# ใช้ pytesseract + Pillow (PIL) เพื่อจับภาพหน้าจอ (screenshot)
+# แล้วแปลงภาพเป็นข้อความ (OCR = Optical Character Recognition)
 # -------------------------
 
-import mss
-from PIL import Image
 import pytesseract
-import io
-import os
-from config import TESSERACT_CMD
+import pyautogui
+from PIL import Image
 
-# ให้ pytesseract รู้พาธ tesseract.exe (ถ้ามี)
-if TESSERACT_CMD:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+class ScreenReader:
+    """
+    คลาส ScreenReader
+    -----------------
+    ความสามารถ:
+    - จับภาพหน้าจอ (Screenshot)
+    - ใช้ OCR (pytesseract) เพื่ออ่านข้อความจากภาพ
+    - รองรับการอ่านข้อความทั้งจอ หรือเฉพาะบางส่วน (Crop)
+    """
 
-def screenshot(region=None):
-    """
-    ถ่าย screenshot
-    - region: (left, top, width, height) หรือ None = full screen
-    คืนค่า PIL.Image
-    """
-    with mss.mss() as sct:
-        if region:
-            left, top, width, height = region
-            monitor = {"left": left, "top": top, "width": width, "height": height}
-        else:
-            monitor = sct.monitors[0]  # full screen
-        sct_img = sct.grab(monitor)
-        img = Image.frombytes("RGB", sct_img.size, sct_img.rgb)
-        return img
+    def __init__(self, lang="tha+eng"):
+        """
+        lang: กำหนดภาษาที่จะใช้ OCR เช่น
+            - "tha"   = ภาษาไทย
+            - "eng"   = ภาษาอังกฤษ
+            - "tha+eng" = อ่านได้ทั้งไทยและอังกฤษ
+        """
+        self.lang = lang
+        print(f"[ScreenReader] ✅ Initialised OCR language = {self.lang}")
 
-def read_screen(region=None, lang='tha+eng'):
-    """
-    อ่านข้อความจากจอด้วย pytesseract
-    - region: ถ้าให้เฉพาะพื้นที่ ให้ส่ง tuple (left, top, width, height)
-    - lang: ภาษาเพื่อเพิ่มความแม่นยำ (เช่น 'tha+eng')
-    คืนค่า: string (text)
-    """
-    try:
-        img = screenshot(region)
-        # ก่อน OCR อาจปรับขาวดำ / ขนาดเพื่อความแม่นยำ (ไม่บังคับ)
-        text = pytesseract.image_to_string(img, lang=lang)
+    def read_screen(self):
+        """
+        จับภาพทั้งหน้าจอ → แปลงเป็นข้อความด้วย OCR
+        return: string (ข้อความที่อ่านได้)
+        """
+        print("[ScreenReader] 🖼 กำลังจับภาพหน้าจอทั้งจอ...")
+        screenshot = pyautogui.screenshot()   # ถ่ายภาพทั้งจอ
+        text = pytesseract.image_to_string(screenshot, lang=self.lang)  # OCR
+        print("[ScreenReader] 📖 ข้อความที่อ่านได้:", text.strip()[:50], "...")
         return text.strip()
-    except Exception as e:
-        return f"[OCR ERROR] {e}"
 
-def save_screenshot(path='screenshot.png', region=None):
-    img = screenshot(region)
-    img.save(path)
-    return path
+    def read_region(self, x, y, width, height):
+        """
+        จับภาพเฉพาะพื้นที่ (x, y, w, h) → OCR
+        เช่น อ่านกล่องข้อความ, ปุ่ม, หรือส่วนหนึ่งของหน้าจอ
+        return: string (ข้อความที่อ่านได้)
+        """
+        print(f"[ScreenReader] 🖼 จับภาพบางส่วน: x={x}, y={y}, w={width}, h={height}")
+        screenshot = pyautogui.screenshot(region=(x, y, width, height))  # Crop
+        text = pytesseract.image_to_string(screenshot, lang=self.lang)
+        print("[ScreenReader] 📖 ข้อความที่อ่านได้:", text.strip()[:50], "...")
+        return text.strip()
+
+    def save_screenshot(self, filepath="screenshot.png"):
+        """
+        จับภาพหน้าจอแล้วบันทึกเป็นไฟล์ .png
+        เหมาะกับการ debug หรือเก็บ log
+        """
+        screenshot = pyautogui.screenshot()
+        screenshot.save(filepath)
+        print(f"[ScreenReader] 💾 บันทึกภาพหน้าจอที่ {filepath}")

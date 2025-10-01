@@ -1,29 +1,22 @@
-# Core
+# Core AI / LLM
 requests
+openai
 
-# API Server
-fastapi
-uvicorn
-
-# Speech-to-Text
-openai-whisper
+# Speech-to-Text (Whisper)
+whisper @ git+https://github.com/openai/whisper.git
 sounddevice
+numpy
 
-# Text-to-Speech
+# Text-to-Speech (Offline pyttsx3)
 pyttsx3
-TTS
-gTTS
-pydub
 
-# Input Control
+# Screen Reader (OCR)
+pytesseract
+pillow
+
+# Keyboard & Mouse automation
 pyautogui
 pynput
 
-# OCR / Screen Processing
-pytesseract
-mss
-opencv-python
-
-# Utilities
-numpy
-Pillow
+# Utils
+rich
