@@ -1,62 +1,46 @@
 # core/screen_reader.py
 # -------------------------
-# โมดูลนี้ทำหน้าที่เป็น "Screen Reader" เบื้องต้น
-# ใช้ pytesseract + Pillow (PIL) เพื่อจับภาพหน้าจอ (screenshot)
-# แล้วแปลงภาพเป็นข้อความ (OCR = Optical Character Recognition)
+# จัดการ OCR (อ่านข้อความจากหน้าจอ)
 # -------------------------
 
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))  # ให้เจอ config และ core อื่นๆ
+
 import pytesseract
-import pyautogui
 from PIL import Image
+from core.screen_capturer import screenshot_pil
 
 class ScreenReader:
-    """
-    คลาส ScreenReader
-    -----------------
-    ความสามารถ:
-    - จับภาพหน้าจอ (Screenshot)
-    - ใช้ OCR (pytesseract) เพื่ออ่านข้อความจากภาพ
-    - รองรับการอ่านข้อความทั้งจอ หรือเฉพาะบางส่วน (Crop)
-    """
-
-    def __init__(self, lang="tha+eng"):
+    def __init__(self, lang="eng", default_monitor=0, default_region=None):
         """
-        lang: กำหนดภาษาที่จะใช้ OCR เช่น
-            - "tha"   = ภาษาไทย
-            - "eng"   = ภาษาอังกฤษ
-            - "tha+eng" = อ่านได้ทั้งไทยและอังกฤษ
+        ScreenReader: อ่านข้อความจากหน้าจอด้วย OCR
+        - lang: กำหนดภาษาสำหรับ Tesseract เช่น "eng", "tha", หรือ "tha+eng"
+        - default_monitor: เลือกจอที่ต้องการ (0 = all, 1 = main, 2+ = จออื่นๆ)
+        - default_region: tuple (left, top, width, height) ถ้าอยาก fix พื้นที่ OCR
         """
         self.lang = lang
-        print(f"[ScreenReader] ✅ Initialised OCR language = {self.lang}")
+        self.default_monitor = default_monitor
+        self.default_region = default_region
 
-    def read_screen(self):
+    def read_text(self, region=None, resize_to=None, monitor=None):
         """
-        จับภาพทั้งหน้าจอ → แปลงเป็นข้อความด้วย OCR
-        return: string (ข้อความที่อ่านได้)
+        OCR อ่านข้อความจากหน้าจอ
+        - region: (x,y,w,h) พื้นที่ OCR ถ้า None ใช้ default_region
+        - resize_to: (w,h) ถ้าอยากย่อ/ขยายก่อน OCR
+        - monitor: เลือกจอที่จะจับ (override default_monitor)
         """
-        print("[ScreenReader] 🖼 กำลังจับภาพหน้าจอทั้งจอ...")
-        screenshot = pyautogui.screenshot()   # ถ่ายภาพทั้งจอ
-        text = pytesseract.image_to_string(screenshot, lang=self.lang)  # OCR
-        print("[ScreenReader] 📖 ข้อความที่อ่านได้:", text.strip()[:50], "...")
+        monitor = monitor if monitor is not None else self.default_monitor
+        region = region if region is not None else self.default_region
+
+        # จับภาพหน้าจอ
+        img = screenshot_pil(region=region)
+
+        # OCR
+        text = pytesseract.image_to_string(img, lang=self.lang)
         return text.strip()
 
-    def read_region(self, x, y, width, height):
-        """
-        จับภาพเฉพาะพื้นที่ (x, y, w, h) → OCR
-        เช่น อ่านกล่องข้อความ, ปุ่ม, หรือส่วนหนึ่งของหน้าจอ
-        return: string (ข้อความที่อ่านได้)
-        """
-        print(f"[ScreenReader] 🖼 จับภาพบางส่วน: x={x}, y={y}, w={width}, h={height}")
-        screenshot = pyautogui.screenshot(region=(x, y, width, height))  # Crop
-        text = pytesseract.image_to_string(screenshot, lang=self.lang)
-        print("[ScreenReader] 📖 ข้อความที่อ่านได้:", text.strip()[:50], "...")
-        return text.strip()
-
-    def save_screenshot(self, filepath="screenshot.png"):
-        """
-        จับภาพหน้าจอแล้วบันทึกเป็นไฟล์ .png
-        เหมาะกับการ debug หรือเก็บ log
-        """
-        screenshot = pyautogui.screenshot()
-        screenshot.save(filepath)
-        print(f"[ScreenReader] 💾 บันทึกภาพหน้าจอที่ {filepath}")
+# ✅ Test Mode
+if __name__ == "__main__":
+    sr = ScreenReader(lang="tha+eng")  # รองรับทั้งไทยและอังกฤษ
+    print("📸 OCR Result:")
+    print(sr.read_text())

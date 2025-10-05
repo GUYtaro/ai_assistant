@@ -3,7 +3,7 @@ requests
 openai
 
 # Speech-to-Text (Whisper)
-whisper @ git+https://github.com/openai/whisper.git
+openai-whisper
 sounddevice
 numpy
 
