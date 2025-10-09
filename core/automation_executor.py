@@ -7,7 +7,7 @@
 import time
 from typing import Dict, Any
 
-from core.keyboard_mouse.controller import KeyboardMouseController  # ตามโครงที่สร้างไว้
+from core.keyboard_mouse import KeyboardMouseController  # ตามโครงที่สร้างไว้
 from core.tts_client import TTSClient
 from core.stt_client import STTClient
 
