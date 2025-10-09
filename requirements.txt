@@ -5,14 +5,19 @@ openai
 # Speech-to-Text (Whisper)
 openai-whisper
 sounddevice
+soundfile
 numpy
 
-# Text-to-Speech (Offline pyttsx3)
+# Text-to-Speech (รองรับภาษาไทย)
 pyttsx3
+gTTS           # Google TTS (สำรอง)
+playsound      # เล่นเสียง MP3
 
-# Screen Reader (OCR)
-pytesseract
-pillow
+# Screen Capture & OCR
+mss              # จับภาพหน้าจอ
+pytesseract      # OCR engine
+pillow           # Image processing
+opencv-python    # Template matching
 
 # Keyboard & Mouse automation
 pyautogui
