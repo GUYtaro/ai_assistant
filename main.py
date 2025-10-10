@@ -14,6 +14,7 @@ from core.automation_executor import AutomationExecutor
 from core.screen_capturer import screenshot_data_uri, screenshot_pil
 from core.screen_reader import ScreenReader
 from core.hotkey_listener import HotkeyListener
+from core.app_launcher import AppLauncher  # เพิ่มบรรทัดนี้
 
 
 def main():
