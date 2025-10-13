@@ -14,7 +14,7 @@ from core.automation_executor import AutomationExecutor
 from core.screen_capturer import screenshot_data_uri, screenshot_pil
 from core.screen_reader import ScreenReader
 from core.hotkey_listener import HotkeyListener
-from core.app_launcher import AppLauncher
+from core.app_launcher import AppLauncher  # เพิ่มบรรทัดนี้
 
 
 def main():
@@ -25,7 +25,7 @@ def main():
     vision = VisionSystem()
     parser = CommandParser(llm_client=llm)
     executor = AutomationExecutor(monitor=1)
-    launcher = AppLauncher()
+    launcher = AppLauncher()  # เพิ่มบรรทัดนี้
 
     chat_history = [{"role": "system", "content": "คุณคือผู้ช่วยที่ตอบเป็นภาษาไทยอย่างเป็นมิตร"}]
 
@@ -36,7 +36,6 @@ def main():
     print("โหมด Vision: พิมพ์ 'vision:1 คำถาม...'")
     print("โหมดเสียง: กด F4 เพื่อเริ่มพูด")
     print("โหมด Automation: พูดเช่น 'คลิกปุ่ม File' หรือ 'พิมพ์ hello world'")
-    print("🔧 Hybrid Mode: เปิดใช้งาน (Rule-based + AI)")
     print("พิมพ์ exit/quit/q เพื่อออก\n")
 
     # ฟังก์ชันสำหรับ F4
@@ -68,20 +67,13 @@ def main():
             if any(word in user_input.lower() for word in ["คลิก", "พิมพ์", "กด", "เลื่อน"]):
                 print("⚙️ ตรวจจับคำสั่ง Automation...")
                 ok, parsed = parser.parse(user_input)
-                
-                # 🔥 แสดงผลว่าใช้ method อะไร
                 if ok:
-                    method = parsed.get("method", "ai")
-                    method_icons = {"rule-based": "⚡", "ai": "🤖"}
-                    print(f"📋 [{method_icons.get(method, '🔧')} {method.upper()}] Action: {parsed}")
-                    
                     result = executor.execute(parsed)
                     if result.get("ok"):
                         tts.speak("เรียบร้อยครับ")
                     else:
                         tts.speak("ขอโทษครับ ทำไม่สำเร็จ")
                 else:
-                    print("❌ ไม่สามารถแปลงคำสั่งได้:", parsed)
                     tts.speak("ขอโทษครับ ผมไม่เข้าใจคำสั่ง")
             else:
                 # แชทปกติ
@@ -108,19 +100,45 @@ def main():
         """แยกชื่อโปรแกรมและ URL จากคำสั่ง"""
         text_lower = text.lower()
         
-        # ตรวจจับ URL
+        # ตรวจจับ URL (เพิ่มเว็บไซต์ยอดนิยม)
         url = None
         if "youtube" in text_lower:
             url = "https://youtube.com"
-        elif "google" in text_lower:
+        elif "google" in text_lower and "search" not in text_lower and "ค้นหา" not in text_lower:
             url = "https://google.com"
         elif "facebook" in text_lower:
             url = "https://facebook.com"
         elif "github" in text_lower:
             url = "https://github.com"
+        elif "chatgpt" in text_lower or "chat gpt" in text_lower:
+            url = "https://chat.openai.com"
+        elif "claude" in text_lower:
+            url = "https://claude.ai"
+        elif "gemini" in text_lower or "bard" in text_lower:
+            url = "https://gemini.google.com"
+        elif "twitter" in text_lower or "x.com" in text_lower:
+            url = "https://x.com"
+        elif "instagram" in text_lower:
+            url = "https://instagram.com"
+        elif "netflix" in text_lower:
+            url = "https://netflix.com"
+        elif "spotify" in text_lower:
+            url = "https://open.spotify.com"
+        
+        # ตรวจจับคำค้นหา Google
+        if ("ค้นหา" in text_lower or "search" in text_lower) and not url:
+            # แยกคำค้นหาออกมา
+            query = text_lower.replace("เปิด", "").replace("open", "")
+            query = query.replace("ค้นหา", "").replace("search", "")
+            query = query.replace("chrome", "").replace("firefox", "").replace("edge", "")
+            query = query.replace("ผ่าน", "").replace("ใน", "")
+            query = query.strip()
+            if query:
+                import urllib.parse
+                url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
         
         # ตรวจจับโปรแกรม (เช็คเบราว์เซอร์ก่อน)
-        if "chrome" in text_lower or ("youtube" in text_lower or "google" in text_lower or "facebook" in text_lower):
+        if "chrome" in text_lower or ("youtube" in text_lower or "google" in text_lower or "facebook" in text_lower or url):
             return "chrome", url
         elif "firefox" in text_lower:
             return "firefox", url
@@ -157,9 +175,12 @@ def main():
 
             # ตรวจจับคำสั่งเปิดโปรแกรม (ต้องอยู่ก่อน Vision และ Automation)
             if any(word in user_input.lower() for word in ["เปิด", "open", "launch", "start"]):
+                print(f"[DEBUG] ตรวจพบคำสั่งเปิดโปรแกรม: '{user_input}'")
                 app_name, url = _parse_open_command(user_input)
+                print(f"[DEBUG] แปลงได้: app_name={app_name}, url={url}")
+                
                 if app_name:
-                    print(f"🚀 กำลังเปิด {app_name}...")
+                    print(f"🚀 กำลังเปิด {app_name}..." + (f" ({url})" if url else ""))
                     result = launcher.open_url(url, app_name) if url else launcher.launch(app_name)
                     if result["ok"]:
                         print(f"✅ {result['message']}")
@@ -167,7 +188,10 @@ def main():
                     else:
                         print(f"❌ {result['message']}")
                         tts.speak("ขอโทษครับ เปิดไม่ได้")
-                    continue
+                else:
+                    print("[DEBUG] ไม่สามารถแยกชื่อโปรแกรมได้")
+                    tts.speak("ขอโทษครับ ผมไม่แน่ใจว่าจะเปิดอะไร")
+                continue
 
             # Vision Mode
             if user_input.lower().startswith("vision"):
@@ -206,23 +230,19 @@ def main():
                         print(f"[WARN] OCR/Vision ไม่พร้อม: {e}")
 
                 ok, parsed = parser.parse(user_input, ocr_text=ocr_text, hint_image_data_uri=data_uri)
-                
-                # 🔥 แสดงผลว่าใช้ method อะไร
-                if ok:
-                    method = parsed.get("method", "ai")
-                    method_icons = {"rule-based": "⚡", "ai": "🤖"}
-                    print(f"📋 [{method_icons.get(method, '🔧')} {method.upper()}] Action: {parsed}")
-                    
-                    result = executor.execute(parsed)
-                    if result.get("ok"):
-                        print("✅ สำเร็จ:", result.get("message"))
-                        tts.speak("เรียบร้อยครับ")
-                    else:
-                        print("❌ ไม่สำเร็จ:", result.get("message"))
-                        tts.speak("ขอโทษครับ ทำไม่สำเร็จ")
-                else:
+                if not ok:
                     print("❌ ไม่สามารถแปลงคำสั่งได้:", parsed)
                     tts.speak("ขอโทษครับ ผมไม่เข้าใจคำสั่ง")
+                    continue
+
+                print(f"📋 Action: {parsed}")
+                result = executor.execute(parsed)
+                if result.get("ok"):
+                    print("✅ สำเร็จ:", result.get("message"))
+                    tts.speak("เรียบร้อยครับ")
+                else:
+                    print("❌ ไม่สำเร็จ:", result.get("message"))
+                    tts.speak("ขอโทษครับ ทำไม่สำเร็จ")
                 continue
 
             # โหมดพิมพ์ปกติ
