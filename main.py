@@ -1,7 +1,7 @@
 # main.py
 # -------------------------
-# โปรแกรมหลักของ AI Assistant
-# รองรับ: แชท, เสียง (F4), Vision (หลายจอ), Automation
+# โปรแกรมหลักของ AI Assistant (Enhanced Version)
+# เพิ่ม SmartAppLauncher + Context Memory + Smart Search
 # -------------------------
 
 import re
@@ -14,7 +14,90 @@ from core.automation_executor import AutomationExecutor
 from core.screen_capturer import screenshot_data_uri, screenshot_pil
 from core.screen_reader import ScreenReader
 from core.hotkey_listener import HotkeyListener
-from core.app_launcher import AppLauncher  # เพิ่มบรรทัดนี้
+from core.app_launcher import AppLauncher
+from core.smart_app_launcher import SmartAppLauncher  # ✅ เพิ่ม SmartAppLauncher
+
+
+class AssistantContext:
+    """คลาสจัดการ Context Memory ของผู้ช่วย"""
+    def __init__(self):
+        self.memory = {
+            "last_opened_app": None,
+            "recent_commands": [],
+            "favorite_apps": {},
+            "user_preferences": {
+                "preferred_browser": "chrome",
+                "language": "th"
+            }
+        }
+        self.max_history = 10  # จำกัดประวัติล่าสุด
+    
+    def record_command(self, command: str, result: str):
+        """บันทึกคำสั่งและผลลัพธ์"""
+        self.memory["recent_commands"].append({
+            "command": command,
+            "result": result,
+            "timestamp": self._get_timestamp()
+        })
+        # จำกัดจำนวนประวัติ
+        if len(self.memory["recent_commands"]) > self.max_history:
+            self.memory["recent_commands"].pop(0)
+    
+    def record_app_launch(self, app_name: str, success: bool):
+        """บันทึกการเปิดแอปพลิเคชัน"""
+        self.memory["last_opened_app"] = app_name
+        
+        # อัพเดทสถิติแอปที่ชอบ
+        if app_name not in self.memory["favorite_apps"]:
+            self.memory["favorite_apps"][app_name] = {
+                "launch_count": 0,
+                "success_count": 0
+            }
+        
+        self.memory["favorite_apps"][app_name]["launch_count"] += 1
+        if success:
+            self.memory["favorite_apps"][app_name]["success_count"] += 1
+    
+    def get_smart_suggestion(self, partial_command: str) -> str:
+        """ให้คำแนะนำอัจฉริยะจากประวัติ"""
+        partial_lower = partial_command.lower()
+        
+        # ค้นหาจากประวัติคำสั่ง
+        for cmd in reversed(self.memory["recent_commands"]):
+            if partial_lower in cmd["command"].lower():
+                return f"เคยทำคำสั่งนี้: '{cmd['command']}' -> {cmd['result']}"
+        
+        # ค้นหาจากแอปที่ชอบ
+        for app_name, stats in self.memory["favorite_apps"].items():
+            if partial_lower in app_name.lower():
+                success_rate = (stats["success_count"] / stats["launch_count"]) * 100
+                return f"เคยเปิด '{app_name}' {stats['launch_count']} ครั้ง (สำเร็จ {success_rate:.0f}%)"
+        
+        return "ไม่พบประวัติที่เกี่ยวข้อง"
+    
+    def _get_timestamp(self) -> str:
+        """ได้ timestamp ปัจจุบัน"""
+        from datetime import datetime
+        return datetime.now().strftime("%H:%M:%S")
+    
+    def get_context_summary(self) -> str:
+        """สรุป context ปัจจุบัน"""
+        summary = []
+        if self.memory["last_opened_app"]:
+            summary.append(f"เปิดล่าสุด: {self.memory['last_opened_app']}")
+        
+        if self.memory["recent_commands"]:
+            recent_count = len(self.memory["recent_commands"])
+            summary.append(f"คำสั่งล่าสุด: {recent_count} รายการ")
+        
+        if self.memory["favorite_apps"]:
+            top_app = max(self.memory["favorite_apps"].items(), 
+                         key=lambda x: x[1]["launch_count"], 
+                         default=(None, None))
+            if top_app[0]:
+                summary.append(f"แอปยอดนิยม: {top_app[0]}")
+        
+        return " | ".join(summary) if summary else "ไม่มีประวัติล่าสุด"
 
 
 def main():
@@ -25,18 +108,48 @@ def main():
     vision = VisionSystem()
     parser = CommandParser(llm_client=llm)
     executor = AutomationExecutor(monitor=1)
-    launcher = AppLauncher()  # เพิ่มบรรทัดนี้
+    launcher = AppLauncher()
+    smart_launcher = SmartAppLauncher() # ✅ ใช้ SmartAppLauncher
+    context = AssistantContext()  # ✅ ระบบ Context Memory
 
     chat_history = [{"role": "system", "content": "คุณคือผู้ช่วยที่ตอบเป็นภาษาไทยอย่างเป็นมิตร"}]
 
     print("=========================================================")
-    print("=== 🤖 AI Assistant (Full Automation Mode) ===")
+    print("=== 🤖 AI Assistant (Enhanced with Smart Features) ===")
     print("=========================================================")
     print("โหมดพิมพ์: พิมพ์ข้อความ แล้วกด Enter")
     print("โหมด Vision: พิมพ์ 'vision:1 คำถาม...'")
     print("โหมดเสียง: กด F4 เพื่อเริ่มพูด")
     print("โหมด Automation: พูดเช่น 'คลิกปุ่ม File' หรือ 'พิมพ์ hello world'")
+    print("🧠 ฟีเจอร์ใหม่: Smart App Search + Context Memory")
     print("พิมพ์ exit/quit/q เพื่อออก\n")
+
+    def smart_app_launch(app_name: str, url: str = None) -> dict:
+        """
+        ✅ ระบบเปิดแอปอัจฉริยะ
+        ใช้ SmartAppLauncher ก่อน → Fallback ไปที่ AppLauncher
+        """
+        print(f"🚀 กำลังเปิด '{app_name}' ด้วยระบบอัจฉริยะ...")
+        
+        # 1. ใช้ SmartAppLauncher ก่อน (ค้นหาอัตโนมัติ)
+        result = smart_launcher.launch(app_name)
+        
+        # 2. ถ้าไม่สำเร็จ และมี URL → ใช้ AppLauncher เปิด URL
+        if not result["ok"] and url:
+            print(f"[Smart Fallback] ใช้ AppLauncher เปิด URL...")
+            result = launcher.open_url(url, app_name)
+        
+        # 3. ถ้ายังไม่สำเร็จ → ใช้ AppLauncher ลองเปิดอีกครั้ง
+        if not result["ok"] and not url:
+            print(f"[Smart Fallback] ใช้ AppLauncher ค้นหา...")
+            result = launcher.launch(app_name)
+        
+        # บันทึกผลลัพธ์ลง Context Memory
+        context.record_app_launch(app_name, result["ok"])
+        context.record_command(f"เปิด {app_name}", 
+                             "สำเร็จ" if result["ok"] else "ล้มเหลว")
+        
+        return result
 
     # ฟังก์ชันสำหรับ F4
     def handle_voice():
@@ -51,12 +164,17 @@ def main():
 
             print(f"📝 คุณพูดว่า: {user_input}")
             
+            # ✅ ตรวจสอบ Context Memory ก่อนประมวลผล
+            context_suggestion = context.get_smart_suggestion(user_input)
+            if "เคย" in context_suggestion:
+                print(f"🧠 [Context] {context_suggestion}")
+            
             # ตรวจสอบว่าเป็นคำสั่งเปิดโปรแกรมหรือไม่
             if any(word in user_input.lower() for word in ["เปิด", "open", "launch", "start"]):
                 # แยกชื่อโปรแกรม
                 app_name, url = _parse_open_command(user_input)
                 if app_name:
-                    result = launcher.open_url(url, app_name) if url else launcher.launch(app_name)
+                    result = smart_app_launch(app_name, url)  # ✅ ใช้ระบบอัจฉริยะ
                     if result["ok"]:
                         tts.speak(f"เปิด {app_name} แล้วครับ")
                     else:
@@ -69,19 +187,30 @@ def main():
                 ok, parsed = parser.parse(user_input)
                 if ok:
                     result = executor.execute(parsed)
+                    context.record_command(user_input, 
+                                         "สำเร็จ" if result.get("ok") else "ล้มเหลว")
                     if result.get("ok"):
                         tts.speak("เรียบร้อยครับ")
                     else:
                         tts.speak("ขอโทษครับ ทำไม่สำเร็จ")
                 else:
                     tts.speak("ขอโทษครับ ผมไม่เข้าใจคำสั่ง")
-            else:
-                # แชทปกติ
-                reply_text = llm.ask(user_input, history=chat_history)
-                chat_history.append({"role": "user", "content": user_input})
-                chat_history.append({"role": "assistant", "content": reply_text})
-                print(f"🤖 ผู้ช่วย: {reply_text}")
-                tts.speak(reply_text)
+                return
+            
+            # ตรวจสอบคำสั่งเกี่ยวกับ context
+            if any(word in user_input.lower() for word in ["ประวัติ", "history", "ที่แล้ว", "ล่าสุด"]):
+                summary = context.get_context_summary()
+                print(f"🧠 [Context Summary] {summary}")
+                tts.speak(f"สรุปกิจกรรมล่าสุด: {summary}")
+                return
+            
+            # แชทปกติ
+            reply_text = llm.ask(user_input, history=chat_history)
+            chat_history.append({"role": "user", "content": user_input})
+            chat_history.append({"role": "assistant", "content": reply_text})
+            context.record_command(user_input, "แชทปกติ")
+            print(f"🤖 ผู้ช่วย: {reply_text}")
+            tts.speak(reply_text)
 
         except Exception as e:
             print(f"[ERROR] {e}")
@@ -95,7 +224,7 @@ def main():
     )
     hotkey_listener.start()
 
-    # ฟังก์ชันช่วยแยกคำสั่งเปิดโปรแกรม
+    # ฟังก์ชันช่วยแยกคำสั่งเปิดโปรแกรม (คงเดิมแต่ปรับปรุง)
     def _parse_open_command(text):
         """แยกชื่อโปรแกรมและ URL จากคำสั่ง"""
         text_lower = text.lower()
@@ -156,6 +285,14 @@ def main():
             return "powershell", None
         elif "explorer" in text_lower or "เอ็กซ์พลอเรอร์" in text_lower or "file explorer" in text_lower:
             return "explorer", None
+        elif "line" in text_lower:
+            return "line", None
+        elif "discord" in text_lower:
+            return "discord", None
+        elif "vscode" in text_lower or "visual studio code" in text_lower:
+            return "vscode", None
+        elif "steam" in text_lower:
+            return "steam", None
         
         # ถ้าไม่มีเบราว์เซอร์แต่มี URL → ใช้ Chrome เป็นค่าเริ่มต้น
         if url:
@@ -166,23 +303,29 @@ def main():
     # วนลูปรับ input
     while True:
         try:
-            user_input = input("คุณ (พิมพ์/vision/F4): ")
+            user_input = input("คุณ (พิมพ์/vision/F4/context): ")
 
             # ออกจากโปรแกรม
             if user_input.lower() in ["exit", "quit", "q"]:
                 tts.speak("ลาก่อนครับ")
                 break
 
-            # ตรวจจับคำสั่งเปิดโปรแกรม (ต้องอยู่ก่อน Vision และ Automation)
+            # ✅ แสดง Context Summary
+            if user_input.lower() in ["context", "ประวัติ", "history"]:
+                summary = context.get_context_summary()
+                print(f"🧠 [Context Memory] {summary}")
+                tts.speak(f"สรุปกิจกรรมล่าสุด: {summary}")
+                continue
+
+            # ตรวจจับคำสั่งเปิดโปรแกรม (ใช้ระบบอัจฉริยะ)
             if any(word in user_input.lower() for word in ["เปิด", "open", "launch", "start"]):
                 app_name, url = _parse_open_command(user_input)
                 
                 if app_name:
-                    print(f"🚀 กำลังเปิด '{app_name}'..." + (f" ({url})" if url else ""))
-                    result = launcher.open_url(url, app_name) if url else launcher.launch(app_name)
+                    result = smart_app_launch(app_name, url)  # ✅ ใช้ระบบอัจฉริยะ
                     if result["ok"]:
                         print(f"✅ {result['message']}")
-                        tts.speak(f"เปิดแล้วครับ")
+                        tts.speak(f"เปิด {app_name} แล้วครับ")
                     else:
                         print(f"❌ {result['message']}")
                         tts.speak("ขอโทษครับ ไม่พบโปรแกรมนี้")
@@ -191,7 +334,7 @@ def main():
                     tts.speak("ขอโทษครับ ผมไม่แน่ใจว่าจะเปิดอะไร")
                 continue
 
-            # Vision Mode
+            # Vision Mode (คงเดิม)
             if user_input.lower().startswith("vision"):
                 match = re.match(r'vision:?(\d*)\s*(.*)', user_input, re.IGNORECASE)
                 if match:
@@ -204,6 +347,7 @@ def main():
                     print(f"📸 จับภาพจอที่ {monitor}...")
                     try:
                         reply_text = vision.analyze(vision_prompt, monitor=monitor)
+                        context.record_command(f"vision: {vision_prompt}", "วิเคราะห์ภาพ")
                         print(f"🤖 ผู้ช่วย (Vision-{monitor}): {reply_text}")
                         tts.speak(reply_text)
                     except Exception as e:
@@ -211,7 +355,7 @@ def main():
                         tts.speak("เกิดข้อผิดพลาดในการจับภาพ")
                     continue
 
-            # ตรวจจับคำสั่ง Automation (คลิก, พิมพ์, กด, เลื่อน)
+            # ตรวจจับคำสั่ง Automation (คงเดิม)
             if any(word in user_input.lower() for word in ["คลิก", "พิมพ์", "กด", "เลื่อน", "ปุ่ม"]):
                 print("⚙️ ตรวจจับคำสั่ง Automation → กำลังวิเคราะห์...")
                 
@@ -235,6 +379,8 @@ def main():
 
                 print(f"📋 Action: {parsed}")
                 result = executor.execute(parsed)
+                context.record_command(user_input, 
+                                     "สำเร็จ" if result.get("ok") else "ล้มเหลว")
                 if result.get("ok"):
                     print("✅ สำเร็จ:", result.get("message"))
                     tts.speak("เรียบร้อยครับ")
@@ -248,6 +394,7 @@ def main():
                 reply_text = llm.ask(user_input, history=chat_history)
                 chat_history.append({"role": "user", "content": user_input})
                 chat_history.append({"role": "assistant", "content": reply_text})
+                context.record_command(user_input, "แชทปกติ")
                 print(f"🤖 ผู้ช่วย: {reply_text}")
                 tts.speak(reply_text)
 
