@@ -16,7 +16,9 @@ from core.screen_capturer import screenshot_data_uri, screenshot_pil
 from core.screen_reader import ScreenReader
 from core.hotkey_listener import HotkeyListener
 from core.app_launcher import AppLauncher
-from core.smart_app_launcher import SmartAppLauncher
+from core.smart_app_launcher import SmartAppLauncher 
+from gui.assistant_bar import AssistantBar # (ถ้าต้องการ GUI แบบแถบลอย)
+
 
 
 class AssistantContext:
