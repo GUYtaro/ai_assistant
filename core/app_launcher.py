@@ -1,6 +1,6 @@
 # core/app_launcher.py
 # -------------------------
-# AppLauncher v3 (Integrated with SmartAppLauncher v6)
+# AppLauncher v3 (Integrated with SmartAppLauncher)
 # -------------------------
 # หน้าที่:
 # - ใช้ SmartAppLauncher เป็นระบบหลัก
@@ -13,23 +13,31 @@ from core.smart_app_launcher import SmartAppLauncher
 
 class AppLauncher:
     def __init__(self):
-        # ใช้ SmartAppLauncher v6 (Pro)
-        self.smart = SmartAppLauncher(enable_background_validation=True)
-        print("[AppLauncher] ✅ SmartAppLauncher v6 Loaded")
+        # ✅ แก้ไข: ไม่ส่ง parameter enable_background_validation
+        self.smart = SmartAppLauncher()
+        print("[AppLauncher] ✅ SmartAppLauncher Loaded")
 
     def launch(self, app_name: str, args=None):
         """
         เปิดโปรแกรมโดยใช้ SmartAppLauncher ก่อน
-        ถ้าไม่เจอ → fallback subprocess shell
+        ถ้าไม่เจอ → ไม่ fallback (เพราะจะ error)
         """
         try:
             result = self.smart.launch(app_name, args=args)
             if result.get("ok"):
                 return result
-            # fallback subprocess เผื่อบางกรณี SmartLauncher หาไม่เจอ
-            print("[AppLauncher] ⚠️ SmartLauncher ไม่พบ, ลอง subprocess fallback...")
-            cmd = app_name if args is None else f'"{app_name}" {args}'
-            subprocess.Popen(cmd, shell=True)
-            return {"ok": True, "message": f"เปิด {app_name} (fallback subprocess)"}
+            
+            # ✅ ไม่ fallback subprocess อีกต่อไป (เพราะจะทำให้เกิด error)
+            print(f"[AppLauncher] ❌ ไม่พบโปรแกรม '{app_name}'")
+            return {"ok": False, "message": f"ไม่พบโปรแกรม '{app_name}' ในระบบ"}
+            
         except Exception as e:
             return {"ok": False, "message": f"AppLauncher error: {e}"}
+    
+    def open_url(self, url: str, browser="chrome"):
+        """เปิด URL ในเบราว์เซอร์"""
+        return self.smart.open_url(url, browser)
+    
+    def open_url(self, url: str, browser="chrome"):
+        """เปิด URL ในเบราว์เซอร์"""
+        return self.smart.open_url(url, browser)

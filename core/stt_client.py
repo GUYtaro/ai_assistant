@@ -11,7 +11,7 @@ import tempfile
 import os
 
 class STTClient:
-    def __init__(self, model_size="tiny", language="th"):
+    def __init__(self, model_size="medium", language="th"):
         """
         model_size: ขนาดโมเดล whisper (tiny, base, small, medium, large)
         language: กำหนดภาษา (ค่าเริ่มต้น = "th" ภาษาไทย)

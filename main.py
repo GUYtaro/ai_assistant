@@ -1,14 +1,14 @@
 # main.py
 # -------------------------
 # โปรแกรมหลักของ AI Assistant (Enhanced Version)
-# เพิ่ม SmartAppLauncher + Context Memory + Smart Search
-# ✅ แก้ไขปัญหา "ไม่สามารถแยกชื่อโปรแกรม" โดยส่งคำสั่งทั้งหมดไป SmartAppLauncher
+# ✅ รองรับ Push-to-Talk (กดค้างไมค์)
 # -------------------------
 
 import re
 import sys
+import urllib.parse  # ✅ เพิ่ม import นี้
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QThread
 from core.llm_client import LLMClient
 from core.stt_client import STTClient
 from core.tts_client import TTSClient
@@ -21,14 +21,117 @@ from core.hotkey_listener import HotkeyListener
 from core.app_launcher import AppLauncher
 from core.smart_app_launcher import SmartAppLauncher 
 from gui.assistant_bar import AssistantBar
+import sounddevice as sd
+import numpy as np
+
+
+class VoiceRecorder(QObject):
+    """✅ ตัวอัดเสียงแบบ Push-to-Talk"""
+    
+    recording_started = pyqtSignal()
+    recording_stopped = pyqtSignal(object)  # ส่ง audio data กลับ
+    
+    def __init__(self, stt_client: STTClient):
+        super().__init__()
+        self.stt = stt_client
+        self.is_recording = False
+        self.audio_data = []
+        self.sample_rate = 16000
+        
+    def start_recording(self):
+        """เริ่มอัดเสียง"""
+        if self.is_recording:
+            return
+        
+        self.is_recording = True
+        self.audio_data = []
+        
+        print("[VoiceRecorder] 🔴 เริ่มอัดเสียง...")
+        self.recording_started.emit()
+        
+        # เริ่ม stream อัดเสียง
+        def audio_callback(indata, frames, time, status):
+            if status:
+                print(f"[VoiceRecorder] Status: {status}")
+            if self.is_recording:
+                self.audio_data.append(indata.copy())
+        
+        self.stream = sd.InputStream(
+            samplerate=self.sample_rate,
+            channels=1,
+            callback=audio_callback,
+            dtype=np.float32
+        )
+        self.stream.start()
+    
+    def stop_recording(self):
+        """หยุดอัดเสียง และส่งข้อมูลกลับ"""
+        if not self.is_recording:
+            return
+        
+        self.is_recording = False
+        
+        # หยุด stream
+        if hasattr(self, 'stream'):
+            self.stream.stop()
+            self.stream.close()
+        
+        print("[VoiceRecorder] ⏹️ หยุดอัดเสียง")
+        
+        # รวม audio data
+        if len(self.audio_data) == 0:
+            print("[VoiceRecorder] ❌ ไม่มีข้อมูลเสียง")
+            self.recording_stopped.emit(None)
+            return
+        
+        audio_array = np.concatenate(self.audio_data, axis=0)
+        
+        # ✅ แก้ไข: ใช้ float32 แทน int16 สำหรับ Whisper
+        audio_float32 = audio_array.flatten().astype(np.float32)
+        
+        print(f"[VoiceRecorder] ✅ อัดเสียงได้ {len(audio_float32) / self.sample_rate:.2f} วินาที")
+        
+        # ส่งข้อมูลกลับ
+        self.recording_stopped.emit(audio_float32)
+
+
+class TranscriptionWorker(QThread):
+    """✅ Worker thread สำหรับแปลงเสียงเป็นข้อความ"""
+    
+    transcription_done = pyqtSignal(str)  # ส่งข้อความที่แปลงได้
+    
+    def __init__(self, stt_client: STTClient, audio_data):
+        super().__init__()
+        self.stt = stt_client
+        self.audio_data = audio_data
+    
+    def run(self):
+        """แปลงเสียงเป็นข้อความ"""
+        try:
+            print("[TranscriptionWorker] 🔄 กำลังแปลงเสียงเป็นข้อความ...")
+            
+            # ใช้ Whisper แปลงเสียง
+            text = self.stt.model.transcribe(
+                self.audio_data,
+                language="th",
+                fp16=False
+            )["text"].strip()
+            
+            print(f"[TranscriptionWorker] ✅ แปลงได้: {text}")
+            self.transcription_done.emit(text)
+            
+        except Exception as e:
+            print(f"[TranscriptionWorker] ❌ Error: {e}")
+            self.transcription_done.emit("")
 
 
 class AssistantCore(QObject):
     """คลาสหลักสำหรับประมวลผลคำสั่ง"""
     
-    # สัญญาณสำหรับอัพเดทสถานะใน GUI
     status_updated = pyqtSignal(str)
     response_ready = pyqtSignal(str)
+    # ✅ เพิ่มสัญญาณสำหรับแสดงข้อความจากเสียงใน GUI
+    voice_input_received = pyqtSignal(str)
     
     def __init__(self):
         super().__init__()
@@ -48,11 +151,15 @@ class AssistantCore(QObject):
             self.context = AssistantContext()
             self.command_parser = SmartCommandParser(llm_client=self.llm)
             
+            # ✅ สร้าง VoiceRecorder
+            self.voice_recorder = VoiceRecorder(self.stt)
+            self.voice_recorder.recording_stopped.connect(self.on_audio_recorded)
+            
             self.chat_history = [{"role": "system", "content": "คุณคือผู้ช่วยที่ตอบเป็นภาษาไทยอย่างเป็นมิตร"}]
             
-            # ตั้งค่า hotkey listener
+            # ตั้งค่า hotkey listener (F4)
             self.hotkey_listener = HotkeyListener(
-                callback_start=self.handle_voice,
+                callback_start=self.handle_voice_f4,
                 hotkey="f4",
                 cooldown=2.0
             )
@@ -63,10 +170,132 @@ class AssistantCore(QObject):
         except Exception as e:
             self.status_updated.emit(f"ข้อผิดพลาดในการตั้งค่าระบบ: {str(e)}")
             print(f"Error setting up systems: {e}")
+     
+    @pyqtSlot()
+    def stop_speaking(self):
+        """✅ หยุดการพูด - วิธีด่วนที่ไม่บล็อก"""
+        print("[AssistantCore] ⏹️ หยุดการพูด...")
+        
+        # อัพเดท UI ทันที
+        self.status_updated.emit("หยุดการพูดแล้ว")
+        self.response_ready.emit("⏹️ หยุดการพูดแล้ว")
+        
+        # พยายามหยุดแบบไม่บล็อก
+        try:
+            if hasattr(self.tts, 'engine'):
+                self.tts.engine.stop()
+        except:
+            pass
+        
+        print("[AssistantCore] ✅ ส่งคำสั่งหยุดแล้ว")
+        
+    @pyqtSlot()
+    def stop_speaking(self):
+        """✅ หยุดการพูดปัจจุบัน"""
+        print("[AssistantCore] ⏹️ กำลังหยุดการพูด...")
+        try:
+            # ✅ หยุด TTS
+            if hasattr(self.tts, 'stop_speaking'):
+                success = self.tts.stop_speaking()
+                if success:
+                    self.status_updated.emit("หยุดการพูดแล้ว")
+                    self.response_ready.emit("⏹️ หยุดการพูดแล้ว")
+                    print("[AssistantCore] ✅ หยุดการพูดสำเร็จ")
+                else:
+                    self.status_updated.emit("หยุดการพูดไม่สำเร็จ")
+                    print("[AssistantCore] ❌ หยุดการพูดไม่สำเร็จ")
+            else:
+                # ✅ วิธีสำรอง: สร้าง TTS ใหม่
+                print("[AssistantCore] 🔄 รีสตาร์ทระบบเสียง...")
+                self.tts = TTSClient(lang="th")
+                self.status_updated.emit("หยุดการพูดแล้ว")
+                self.response_ready.emit("⏹️ หยุดการพูดแล้ว")
+                print("[AssistantCore] ✅ หยุดการพูดสำเร็จ (วิธีสำรอง)")
+                
+        except Exception as e:
+            error_msg = f"❌ ข้อผิดพลาดในการหยุดพูด: {str(e)}"
+            print(f"[AssistantCore] {error_msg}")
+            self.status_updated.emit("หยุดการพูดไม่สำเร็จ")
+    
+    @pyqtSlot()
+    def start_recording(self):
+        """✅ เริ่มอัดเสียง (เมื่อกดปุ่มไมค์)"""
+        print("[AssistantCore] 🎤 เริ่มอัดเสียง...")
+        self.status_updated.emit("🔴 กำลังฟัง...")
+        self.voice_recorder.start_recording()
+    
+    @pyqtSlot()
+    def stop_recording(self):
+        """✅ หยุดอัดเสียง (เมื่อปล่อยปุ่มไมค์)"""
+        print("[AssistantCore] ⏹️ หยุดอัดเสียง")
+        self.status_updated.emit("⏳ กำลังประมวลผล...")
+        self.voice_recorder.stop_recording()
+    
+    @pyqtSlot(object)
+    def on_audio_recorded(self, audio_data):
+        """✅ เมื่อได้ข้อมูลเสียงแล้ว → แปลงเป็นข้อความ"""
+        if audio_data is None or len(audio_data) == 0:
+            self.status_updated.emit("❌ ไม่มีเสียง")
+            self.tts.speak("ขอโทษครับ ผมไม่ได้ยินเสียง")
+            return
+        
+        # สร้าง worker thread สำหรับแปลงเสียง
+        self.transcription_worker = TranscriptionWorker(self.stt, audio_data)
+        self.transcription_worker.transcription_done.connect(self.on_transcription_done)
+        self.transcription_worker.start()
+    
+    @pyqtSlot(str)
+    def on_transcription_done(self, text: str):
+        """✅ เมื่อแปลงเสียงเป็นข้อความเสร็จแล้ว"""
+        if not text or text.strip() == "":
+            self.status_updated.emit("❌ ไม่เข้าใจ")
+            self.tts.speak("ขอโทษครับ ผมไม่เข้าใจ")
+            return
+        
+        print(f"📝 คุณพูดว่า: {text}")
+        
+        # ✅ แสดงข้อความจากเสียงใน GUI
+        self.voice_input_received.emit(text)
+        self.response_ready.emit(f"📝 คุณพูดว่า: {text}")
+        
+        # ประมวลผลคำสั่ง
+        self.process_command(text)
+    
+    def handle_voice_f4(self):
+        """จัดการคำสั่งเสียงจาก F4 (แบบเดิม - อัด 5 วินาที)"""
+        try:
+            self.status_updated.emit("กำลังฟัง...")
+            print("🎤 [F4] กำลังอัดเสียง 5 วินาที...")
+            self.tts.speak("เริ่มฟังแล้วครับ")
+            user_input = self.stt.listen_once(duration=5)
+            
+            if not user_input or user_input.strip() == "":
+                self.status_updated.emit("ไม่ได้ยินเสียง")
+                self.tts.speak("ขอโทษครับ ผมไม่ได้ยิน")
+                return
+
+            print(f"📝 คุณพูดว่า: {user_input}")
+            
+            # ✅ ตรวจสอบ Context Memory
+            context_suggestion = self.context.get_smart_suggestion(user_input)
+            if "เคย" in context_suggestion:
+                print(f"🧠 [Context] {context_suggestion}")
+            
+            # ✅ แสดงข้อความจากเสียงใน GUI
+            self.voice_input_received.emit(user_input)
+            
+            # ส่งคำสั่งเสียงไปประมวลผล
+            self.process_command(user_input)
+            
+        except Exception as e:
+            error_msg = f"ข้อผิดพลาดในการประมวลผลเสียง: {str(e)}"
+            self.response_ready.emit(error_msg)
+            self.status_updated.emit("ประมวลผลเสียงไม่สำเร็จ")
+            print(f"[ERROR] {e}")
     
     @pyqtSlot(str)
     def process_command(self, command: str):
-        """ประมวลผลคำสั่งจาก GUI"""
+        """ประมวลผลคำสั่งจาก GUI หรือ Voice"""
         try:
             self.status_updated.emit("กำลังประมวลผล...")
             
@@ -123,10 +352,7 @@ class AssistantCore(QObject):
         """✅ ระบบเปิดแอปอัจฉริยะแบบใหม่"""
         print(f"🚀 กำลังประมวลผล: '{raw_command}'")
         
-        # แยกชื่อโปรแกรมจากคำสั่ง (ตัดคำที่ไม่ต้องการ)
         app_name = self.command_parser.extract_app_name_from_command(raw_command)
-        
-        # เช็ค URL หรือ search query
         url = self.command_parser.extract_url(raw_command)
         search_query = self.command_parser.extract_search_query(raw_command)
         
@@ -136,28 +362,21 @@ class AssistantCore(QObject):
         if search_query:
             print(f"🔍 ค้นหา: {search_query}")
         
-        # 1. ✅ ส่งชื่อโปรแกรมไป SmartAppLauncher ค้นหา
         result = self.smart_launcher.launch(app_name)
         
-        # 2. ถ้าไม่สำเร็จ และมี URL → เปิดผ่านเบราว์เซอร์
         if not result["ok"] and (url or search_query):
             print(f"[Smart Fallback] เปิด URL ผ่านเบราว์เซอร์...")
-            browser = "chrome"  # ใช้ Chrome เป็นค่าเริ่มต้น
-            
-            # ลองเปิดเบราว์เซอร์พร้อม URL
+            browser = "chrome"
             final_url = url or search_query
             result = self.smart_launcher.launch(browser, final_url)
             
-            # ถ้ายังไม่ได้ → ใช้ AppLauncher
             if not result["ok"]:
                 result = self.launcher.open_url(final_url, browser)
         
-        # 3. ถ้ายังไม่สำเร็จ → ใช้ AppLauncher ลองค้นหาอีกครั้ง
         if not result["ok"]:
             print(f"[Smart Fallback] ใช้ AppLauncher ลองอีกครั้ง...")
             result = self.launcher.launch(app_name)
         
-        # บันทึกผลลัพธ์ลง Context Memory
         self.context.record_app_launch(app_name, result["ok"])
         self.context.record_command(f"เปิด {app_name}", 
                                  "สำเร็จ" if result["ok"] else "ล้มเหลว")
@@ -235,35 +454,6 @@ class AssistantCore(QObject):
         self.response_ready.emit(f"🤖 ผู้ช่วย: {reply_text}")
         self.tts.speak(reply_text)
         self.status_updated.emit("พร้อมใช้งาน")
-    
-    def handle_voice(self):
-        """จัดการคำสั่งเสียง"""
-        try:
-            self.status_updated.emit("กำลังฟัง...")
-            print("🎤 [F4] กำลังอัดเสียง 5 วินาที... พูดได้เลยครับ")
-            self.tts.speak("เริ่มฟังแล้วครับ")
-            user_input = self.stt.listen_once(duration=5)
-            
-            if not user_input or user_input.strip() == "":
-                self.status_updated.emit("ไม่ได้ยินเสียง")
-                self.tts.speak("ขอโทษครับ ผมไม่ได้ยิน")
-                return
-
-            print(f"📝 คุณพูดว่า: {user_input}")
-            
-            # ✅ ตรวจสอบ Context Memory
-            context_suggestion = self.context.get_smart_suggestion(user_input)
-            if "เคย" in context_suggestion:
-                print(f"🧠 [Context] {context_suggestion}")
-            
-            # ส่งคำสั่งเสียงไปประมวลผล
-            self.process_command(user_input)
-            
-        except Exception as e:
-            error_msg = f"ข้อผิดพลาดในการประมวลผลเสียง: {str(e)}"
-            self.response_ready.emit(error_msg)
-            self.status_updated.emit("ประมวลผลเสียงไม่สำเร็จ")
-            print(f"[ERROR] {e}")
 
 
 class AssistantContext:
@@ -281,142 +471,116 @@ class AssistantContext:
         self.max_history = 10
     
     def record_command(self, command: str, result: str):
-        """บันทึกคำสั่งและผลลัพธ์"""
+        from datetime import datetime
         self.memory["recent_commands"].append({
             "command": command,
             "result": result,
-            "timestamp": self._get_timestamp()
+            "timestamp": datetime.now().strftime("%H:%M:%S")
         })
         if len(self.memory["recent_commands"]) > self.max_history:
             self.memory["recent_commands"].pop(0)
     
     def record_app_launch(self, app_name: str, success: bool):
-        """บันทึกการเปิดแอปพลิเคชัน"""
         self.memory["last_opened_app"] = app_name
-        
         if app_name not in self.memory["favorite_apps"]:
-            self.memory["favorite_apps"][app_name] = {
-                "launch_count": 0,
-                "success_count": 0
-            }
-        
+            self.memory["favorite_apps"][app_name] = {"launch_count": 0, "success_count": 0}
         self.memory["favorite_apps"][app_name]["launch_count"] += 1
         if success:
             self.memory["favorite_apps"][app_name]["success_count"] += 1
     
     def get_smart_suggestion(self, partial_command: str) -> str:
-        """ให้คำแนะนำอัจฉริยะจากประวัติ"""
         partial_lower = partial_command.lower()
-        
         for cmd in reversed(self.memory["recent_commands"]):
             if partial_lower in cmd["command"].lower():
                 return f"เคยทำคำสั่งนี้: '{cmd['command']}' -> {cmd['result']}"
-        
         for app_name, stats in self.memory["favorite_apps"].items():
             if partial_lower in app_name.lower():
                 success_rate = (stats["success_count"] / stats["launch_count"]) * 100
                 return f"เคยเปิด '{app_name}' {stats['launch_count']} ครั้ง (สำเร็จ {success_rate:.0f}%)"
-        
         return "ไม่พบประวัติที่เกี่ยวข้อง"
     
-    def _get_timestamp(self) -> str:
-        from datetime import datetime
-        return datetime.now().strftime("%H:%M:%S")
-    
     def get_context_summary(self) -> str:
-        """สรุป context ปัจจุบัน"""
         summary = []
         if self.memory["last_opened_app"]:
             summary.append(f"เปิดล่าสุด: {self.memory['last_opened_app']}")
-        
         if self.memory["recent_commands"]:
-            recent_count = len(self.memory["recent_commands"])
-            summary.append(f"คำสั่งล่าสุด: {recent_count} รายการ")
-        
+            summary.append(f"คำสั่งล่าสุด: {len(self.memory['recent_commands'])} รายการ")
         if self.memory["favorite_apps"]:
             top_app = max(self.memory["favorite_apps"].items(), 
-                         key=lambda x: x[1]["launch_count"], 
-                         default=(None, None))
+                         key=lambda x: x[1]["launch_count"], default=(None, None))
             if top_app[0]:
                 summary.append(f"แอปยอดนิยม: {top_app[0]}")
-        
         return " | ".join(summary) if summary else "ไม่มีประวัติล่าสุด"
 
 
 class SmartCommandParser:
-    """✅ ตัวแยกคำสั่งอัจฉริยะด้วย AI - ส่งต่อให้ SmartAppLauncher จัดการ"""
+    """✅ ตัวแยกคำสั่งอัจฉริยะ + แปลงคำไทยเป็นอังกฤษ"""
     
-    def __init__(self, llm_client: LLMClient):
+    def __init__(self, llm_client):
         self.llm = llm_client
+        self.thai_to_english_map = {
+            "ดิสคอร์ต": "discord", "ดิสคอร์ด": "discord", "ดิสคอด": "discord",
+            "ไลน์": "line", "ลาย": "line",
+            "สปอติไฟ": "spotify", "สปอตติฟาย": "spotify",
+            "โครม": "chrome", "ไครม์": "chrome",
+            "เอ็ดจ์": "edge", "ฟายร์ฟอกซ์": "firefox",
+            "สตีม": "steam", "วีเอสโค้ด": "vscode",
+            "โน้ตแพด": "notepad", "แคลคูเลเตอร์": "calculator",
+            "เครื่องคิดเลข": "calculator", "เพ้นท์": "paint",
+            "โรบล็อกซ์": "roblox", "มายคราฟท์": "minecraft",
+            "วอร์ธันเดอร์": "war thunder", "วีเอ็มแวร์": "vmware",
+            "เวิร์ด": "word", "เอ็กเซล": "excel",
+            "พาวเวอร์พอยท์": "powerpoint", "เอาท์ลุค": "outlook",
+            "ทีมส์": "teams", "ซูม": "zoom", "สแล็ก": "slack",
+            "มายเอซุส": "my asus", "อาร์มูรี่เครท": "armoury crate"
+        }
     
     def is_open_command(self, text: str) -> bool:
-        """ตรวจสอบว่าเป็นคำสั่งเปิดโปรแกรมหรือไม่"""
-        text_lower = text.lower()
-        return any(word in text_lower for word in ["เปิด", "open", "launch", "start", "run"])
+        return any(word in text.lower() for word in ["เปิด", "open", "launch", "start", "run"])
     
     def extract_app_name_from_command(self, text: str) -> str:
-        """
-        ✅ แยกชื่อโปรแกรมจากคำสั่ง - ตัดคำที่ไม่ต้องการออก
-        แต่เก็บชื่อโปรแกรมไว้ให้ครบถ้วน
-        """
         text_lower = text.lower()
-        
-        # ตัดคำสั่งออก
-        remove_words = ["เปิด", "open", "launch", "start", "run", "ผ่าน", "ใน", "ด้วย", "หน่อย", "ให้หน่อย"]
-        
+        remove_words = ["เปิด", "open", "launch", "start", "run", "ผ่าน", "ใน", "ด้วย", "หน่อย"]
         app_name = text_lower
         for word in remove_words:
             app_name = app_name.replace(word, "").strip()
-        
-        return app_name
+        app_name_english = self._translate_thai_to_english(app_name)
+        if app_name_english != app_name:
+            print(f"🔄 [Translation] '{app_name}' → '{app_name_english}'")
+        return app_name_english
+    
+    def _translate_thai_to_english(self, thai_text: str) -> str:
+        thai_text = thai_text.strip()
+        if thai_text in self.thai_to_english_map:
+            return self.thai_to_english_map[thai_text]
+        for thai, english in self.thai_to_english_map.items():
+            if thai in thai_text:
+                return english
+        return thai_text
     
     def extract_url(self, text: str) -> str:
-        """ดึง URL ที่รู้จักจากคำสั่ง"""
-        text_lower = text.lower()
         url_map = {
-            "youtube": "https://youtube.com",
-            "google": "https://google.com",
-            "facebook": "https://facebook.com",
-            "github": "https://github.com",
-            "chatgpt": "https://chat.openai.com",
-            "chat gpt": "https://chat.openai.com",
-            "claude": "https://claude.ai",
-            "gemini": "https://gemini.google.com",
-            "bard": "https://gemini.google.com",
-            "twitter": "https://x.com",
-            "x.com": "https://x.com",
-            "instagram": "https://instagram.com",
-            "netflix": "https://netflix.com",
-            "spotify": "https://open.spotify.com"
+            "youtube": "https://youtube.com", "ยูทูป": "https://youtube.com",
+            "google": "https://google.com", "facebook": "https://facebook.com",
+            "chatgpt": "https://chat.openai.com", "claude": "https://claude.ai"
         }
-        
         for keyword, url in url_map.items():
-            if keyword in text_lower:
+            if keyword in text.lower():
                 return url
         return None
     
     def extract_search_query(self, text: str) -> str:
-        """แยก search query จากคำสั่ง"""
-        text_lower = text.lower()
-        if "ค้นหา" not in text_lower and "search" not in text_lower:
+        if "ค้นหา" not in text.lower() and "search" not in text.lower():
             return None
-        
-        # ตัดคำที่ไม่ต้องการ
-        query = text_lower.replace("เปิด", "").replace("open", "")
-        query = query.replace("ค้นหา", "").replace("search", "")
-        query = query.replace("chrome", "").replace("firefox", "").replace("edge", "")
-        query = query.replace("ผ่าน", "").replace("ใน", "").replace("google", "")
-        query = query.strip()
-        
+        query = text.lower().replace("เปิด", "").replace("ค้นหา", "").strip()
         if query:
-            import urllib.parse
+            # ✅ ใช้ urllib.parse ที่ import แล้ว
             return f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-        
         return None
 
 
 def main():
-    """ฟังก์ชันหลักแบบ GUI"""
+    """ฟังก์ชันหลักแบบ GUI - รวมข้อดีทั้งสองเวอร์ชัน"""
     app = QApplication(sys.argv)
     
     # สร้าง core system
@@ -425,30 +589,41 @@ def main():
     # สร้าง GUI
     assistant_bar = AssistantBar()
     
-    # เชื่อมต่อสัญญาณระหว่าง GUI และ Core
-    assistant_bar.text_submitted.connect(assistant_core.process_command)
-    assistant_bar.close_requested.connect(app.quit)
+    # ✅ เชื่อมต่อสัญญาณ (จากเวอร์ชันแรก + เวอร์ชันสอง)
     assistant_core.status_updated.connect(assistant_bar.status_label.setText)
     assistant_core.response_ready.connect(lambda text: print(f"🤖: {text}"))
+    assistant_core.voice_input_received.connect(assistant_bar.show_voice_input)
     
-    # เริ่มต้น hotkey listener
+    # ✅ ป้องกันการพูดซ้ำ (จากเวอร์ชันแรก)
+    assistant_core.response_ready.connect(
+        lambda text: assistant_bar.show_ai_response(text, speak=False)
+    )
+    
+    # ✅ การเชื่อมต่ออื่นๆ (จากเวอร์ชันสอง)
+    assistant_bar.text_submitted.connect(assistant_core.process_command)
+    assistant_bar.close_requested.connect(app.quit)
+    assistant_bar.mic_pressed.connect(assistant_core.start_recording)
+    assistant_bar.mic_released.connect(assistant_core.stop_recording)
+    
+    # ✅ ✅ ✅ เพิ่มการเชื่อมต่อสัญญาณหยุดพูด
+    assistant_bar.stop_speaking_requested.connect(assistant_core.stop_speaking)
+    
+    # ✅ เริ่มต้นระบบ (จากเวอร์ชันสอง)
     assistant_core.hotkey_listener.start()
-    
-    # แสดง GUI
     assistant_bar.show()
     
-    print("=========================================================")
-    print("=== 🤖 AI Assistant (Enhanced with Smart Features) ===")
-    print("=========================================================")
-    print("โหมดพิมพ์: พิมพ์ข้อความในแถบผู้ช่วย แล้วกด Enter")
-    print("โหมด Vision: พิมพ์ 'vision:1 คำถาม...'")
-    print("โหมดเสียง: กด F4 เพื่อเริ่มพูด")
-    print("โหมด Automation: พูดเช่น 'คลิกปุ่ม File' หรือ 'พิมพ์ hello world'")
-    print("🧠 ฟีเจอร์ใหม่: Smart App Search + Context Memory + AI Command Parser")
-    print("พิมพ์ exit/quit/q ในแถบผู้ช่วยเพื่อออก\n")
+    # ✅ แสดงคำแนะนำ (จากเวอร์ชันสอง)
+    print("=" * 60)
+    print("=== 🤖 AI Assistant (GUI + Push-to-Talk) ===")
+    print("=" * 60)
+    print("✅ กดค้างปุ่มไมค์เพื่อพูด")
+    print("✅ กด F4 เพื่ออัดเสียง 5 วินาที")
+    print("✅ พิมพ์คำสั่งแล้วกด Enter")
     
-    # เริ่มต้น event loop
+    assistant_core.status_updated.emit("พร้อมใช้งาน ✅")
     sys.exit(app.exec())
+
+
 
 
 if __name__ == "__main__":
