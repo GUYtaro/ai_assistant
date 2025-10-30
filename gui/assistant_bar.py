@@ -367,7 +367,39 @@ class AssistantBar(QWidget):
         """แสดงข้อความที่ผู้ใช้พูด"""
         self.response_label.setText(f"🎤 {text}")
         self.status_label.setText(f"📝 คุณพูดว่า: {text}")
+        # =====================================================
+    # 🧩 Extension Support - Add Custom Buttons
+    # =====================================================
+    def add_extra_button(self, label: str, callback):
+        """
+        เพิ่มปุ่มพิเศษเข้าในแถบบน เช่น Copilot Vision
+        label: ชื่อปุ่ม (เช่น "🧠 Copilot Vision")
+        callback: ฟังก์ชันที่เรียกเมื่อคลิก
+        """
+        extra_button = QPushButton(label)
+        extra_button.setObjectName("send_button")
+        extra_button.setFixedHeight(26)
+        extra_button.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,0.1);
+                color: #cfe8ff;
+                border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 8px;
+                padding: 4px 8px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: rgba(255,255,255,0.2);
+            }
+        """)
+        extra_button.clicked.connect(callback)
 
+        # แทรกไว้ก่อนปุ่ม "หยุดพูด"
+        parent_layout = self.layout().itemAt(0).widget().layout().itemAt(0).layout()  # top_bar
+        parent_layout.insertWidget(parent_layout.count() - 2, extra_button)
+
+ 
 
 if __name__ == "__main__":
     # ทดสอบ AssistantBar v3
