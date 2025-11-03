@@ -1,0 +1,14 @@
+{
+  "discord": {
+    "path": "C:\\Users\\User\\AppData\\Local\\Discord\\Update.exe",
+    "args": "--processStart Discord.exe"
+  },
+  "update": {
+    "path": "C:\\Users\\User\\AppData\\Local\\Discord\\Update.exe",
+    "args": "--processStart Discord.exe"
+  },
+  "line": "C:\\Users\\User\\AppData\\Local\\LINE\\bin\\LineLauncher.exe",
+  "linelauncher": "C:\\Users\\User\\AppData\\Local\\LINE\\bin\\LineLauncher.exe",
+  "chrome": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "notepad": "notepad.exe"
+}
