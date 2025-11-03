@@ -1,7 +1,7 @@
 # main.py
 # ================================
-# 🤖 AI Assistant (Complete Version with Copilot Vision)
-# ✅ รองรับ Push-to-Talk, Copilot Vision, Screen Sharing
+# 🤖 AI Assistant (Full Version with Complete Copilot Vision)
+# ✅ รองรับ Push-to-Talk, Copilot Vision, Continuous Vision, Interactive Vision
 # ================================
 
 import re
@@ -9,6 +9,7 @@ import sys
 import urllib.parse
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QScrollArea, QFrame
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QThread
+from PyQt6.QtGui import QColor
 import sounddevice as sd
 import numpy as np
 
@@ -25,6 +26,18 @@ from core.hotkey_listener import HotkeyListener
 from core.app_launcher import AppLauncher
 from core.smart_app_launcher import SmartAppLauncher 
 from gui.assistant_bar import AssistantBar
+
+# Import Vision Systems
+try:
+    from core.vision_overlay import VisionOverlay
+    from core.continuous_vision_system import ContinuousVisionSystem
+    from gui.interactive_vision_panel import InteractiveVisionPanel
+    from core.live_vision_stream import LiveVisionStream
+    from gui.live_vision_panel import LiveVisionPanel
+    _HAS_VISION_SYSTEMS = True
+except ImportError as e:
+    print(f"[WARNING] ไม่พบ Vision Systems: {e}")
+    _HAS_VISION_SYSTEMS = False
 
 # Import for Copilot Vision
 try:
@@ -72,7 +85,6 @@ class ScreenSharePanel(QWidget):
         # Display available monitors
         if _HAS_MSS:
             with mss.mss() as sct:
-                # sct.monitors[0] is the combined screen, [1:] are individual monitors
                 for i, mon in enumerate(sct.monitors[1:], start=1):
                     self._add_monitor_frame(vbox, i, mon)
         else:
@@ -146,21 +158,19 @@ class ScreenSharePanel(QWidget):
 class VoiceRecorder(QObject):
     """
     🎤 ตัวบันทึกเสียงแบบ Push-to-Talk
-    บันทึกเสียงเมื่อกดค้างปุ่มไมค์ และแปลงเป็นข้อมูลดิจิตอล
     """
     
     recording_started = pyqtSignal()
-    recording_stopped = pyqtSignal(object)  # ส่ง audio data กลับ
+    recording_stopped = pyqtSignal(object)
     
     def __init__(self, stt_client: STTClient):
         super().__init__()
         self.stt = stt_client
         self.is_recording = False
         self.audio_data = []
-        self.sample_rate = 16000  # ความถี่ที่เหมาะสมกับ Whisper
+        self.sample_rate = 16000
         
     def start_recording(self):
-        """เริ่มบันทึกเสียง"""
         if self.is_recording:
             return
         
@@ -170,60 +180,52 @@ class VoiceRecorder(QObject):
         print("[VoiceRecorder] 🔴 เริ่มบันทึกเสียง...")
         self.recording_started.emit()
         
-        # Callback function สำหรับรับข้อมูลเสียง
         def audio_callback(indata, frames, time, status):
             if status:
                 print(f"[VoiceRecorder] Status: {status}")
             if self.is_recording:
                 self.audio_data.append(indata.copy())
         
-        # เริ่ม stream การบันทึกเสียง
         self.stream = sd.InputStream(
             samplerate=self.sample_rate,
-            channels=1,  # โมโน
+            channels=1,
             callback=audio_callback,
-            dtype=np.float32  # ใช้ float32 สำหรับ Whisper
+            dtype=np.float32
         )
         self.stream.start()
     
     def stop_recording(self):
-        """หยุดบันทึกเสียง และส่งข้อมูลกลับ"""
         if not self.is_recording:
             return
         
         self.is_recording = False
         
-        # หยุด stream
         if hasattr(self, 'stream'):
             self.stream.stop()
             self.stream.close()
         
         print("[VoiceRecorder] ⏹️ หยุดบันทึกเสียง")
         
-        # ตรวจสอบว่ามีข้อมูลเสียงหรือไม่
         if len(self.audio_data) == 0:
             print("[VoiceRecorder] ❌ ไม่มีข้อมูลเสียง")
             self.recording_stopped.emit(None)
             return
         
-        # รวมข้อมูลเสียงทั้งหมด
         audio_array = np.concatenate(self.audio_data, axis=0)
         audio_float32 = audio_array.flatten().astype(np.float32)
         
         duration = len(audio_float32) / self.sample_rate
         print(f"[VoiceRecorder] ✅ บันทึกเสียงได้ {duration:.2f} วินาที")
         
-        # ส่งข้อมูลเสียงกลับ
         self.recording_stopped.emit(audio_float32)
 
 
 class TranscriptionWorker(QThread):
     """
     🔄 Worker thread สำหรับแปลงเสียงเป็นข้อความ
-    ใช้ Whisper model แปลงข้อมูลเสียงเป็นข้อความภาษาไทย
     """
     
-    transcription_done = pyqtSignal(str)  # ส่งข้อความที่แปลงได้
+    transcription_done = pyqtSignal(str)
     
     def __init__(self, stt_client: STTClient, audio_data):
         super().__init__()
@@ -231,15 +233,13 @@ class TranscriptionWorker(QThread):
         self.audio_data = audio_data
     
     def run(self):
-        """แปลงเสียงเป็นข้อความ"""
         try:
             print("[TranscriptionWorker] 🔄 กำลังแปลงเสียงเป็นข้อความ...")
             
-            # ใช้ Whisper model แปลงเสียง
             text = self.stt.model.transcribe(
                 self.audio_data,
-                language="th",  # ภาษาไทย
-                fp16=False      # ใช้ float32 เพื่อความแม่นยำ
+                language="th",
+                fp16=False
             )["text"].strip()
             
             print(f"[TranscriptionWorker] ✅ แปลงได้: {text}")
@@ -253,7 +253,6 @@ class TranscriptionWorker(QThread):
 class AssistantContext:
     """
     🧠 Context Memory สำหรับผู้ช่วย
-    จดจำการใช้งานล่าสุดและความชอบของผู้ใช้
     """
     
     def __init__(self):
@@ -266,22 +265,19 @@ class AssistantContext:
                 "language": "th"
             }
         }
-        self.max_history = 10  # จำนวนคำสั่งล่าสุดที่เก็บไว้
+        self.max_history = 10
     
     def record_command(self, command: str, result: str):
-        """บันทึกคำสั่งและผลลัพธ์"""
         from datetime import datetime
         self.memory["recent_commands"].append({
             "command": command,
             "result": result,
             "timestamp": datetime.now().strftime("%H:%M:%S")
         })
-        # ลบคำสั่งเก่าถ้าเกินจำนวนที่กำหนด
         if len(self.memory["recent_commands"]) > self.max_history:
             self.memory["recent_commands"].pop(0)
     
     def record_app_launch(self, app_name: str, success: bool):
-        """บันทึกการเปิดแอปพลิเคชัน"""
         self.memory["last_opened_app"] = app_name
         if app_name not in self.memory["favorite_apps"]:
             self.memory["favorite_apps"][app_name] = {"launch_count": 0, "success_count": 0}
@@ -290,15 +286,12 @@ class AssistantContext:
             self.memory["favorite_apps"][app_name]["success_count"] += 1
     
     def get_smart_suggestion(self, partial_command: str) -> str:
-        """ให้คำแนะนำจากประวัติการใช้งาน"""
         partial_lower = partial_command.lower()
         
-        # ตรวจสอบคำสั่งล่าสุด
         for cmd in reversed(self.memory["recent_commands"]):
             if partial_lower in cmd["command"].lower():
                 return f"เคยทำคำสั่งนี้: '{cmd['command']}' -> {cmd['result']}"
         
-        # ตรวจสอบแอปพลิเคชันที่เคยเปิด
         for app_name, stats in self.memory["favorite_apps"].items():
             if partial_lower in app_name.lower():
                 success_rate = (stats["success_count"] / stats["launch_count"]) * 100
@@ -307,7 +300,6 @@ class AssistantContext:
         return "ไม่พบประวัติที่เกี่ยวข้อง"
     
     def get_context_summary(self) -> str:
-        """สรุปประวัติการใช้งานล่าสุด"""
         summary = []
         if self.memory["last_opened_app"]:
             summary.append(f"เปิดล่าสุด: {self.memory['last_opened_app']}")
@@ -324,12 +316,10 @@ class AssistantContext:
 class SmartCommandParser:
     """
     🧩 ตัวแยกคำสั่งอัจฉริยะ
-    แปลงคำไทยเป็นภาษาอังกฤษและตรวจจับคำสั่งต่างๆ
     """
     
     def __init__(self, llm_client):
         self.llm = llm_client
-        # Mapping คำไทยเป็นภาษาอังกฤษ
         self.thai_to_english_map = {
             "ดิสคอร์ต": "discord", "ดิสคอร์ด": "discord", "ดิสคอด": "discord",
             "ไลน์": "line", "ลาย": "line",
@@ -348,11 +338,9 @@ class SmartCommandParser:
         }
     
     def is_open_command(self, text: str) -> bool:
-        """ตรวจสอบว่าเป็นคำสั่งเปิดแอปหรือไม่"""
         return any(word in text.lower() for word in ["เปิด", "open", "launch", "start", "run"])
     
     def extract_app_name_from_command(self, text: str) -> str:
-        """แยกชื่อแอปพลิเคชันจากคำสั่ง"""
         text_lower = text.lower()
         remove_words = ["เปิด", "open", "launch", "start", "run", "ผ่าน", "ใน", "ด้วย", "หน่อย"]
         app_name = text_lower
@@ -364,7 +352,6 @@ class SmartCommandParser:
         return app_name_english
     
     def _translate_thai_to_english(self, thai_text: str) -> str:
-        """แปลคำไทยเป็นภาษาอังกฤษ"""
         thai_text = thai_text.strip()
         if thai_text in self.thai_to_english_map:
             return self.thai_to_english_map[thai_text]
@@ -374,7 +361,6 @@ class SmartCommandParser:
         return thai_text
     
     def extract_url(self, text: str) -> str:
-        """แยก URL จากคำสั่ง"""
         url_map = {
             "youtube": "https://youtube.com", "ยูทูป": "https://youtube.com",
             "google": "https://google.com", "facebook": "https://facebook.com",
@@ -386,7 +372,6 @@ class SmartCommandParser:
         return None
     
     def extract_search_query(self, text: str) -> str:
-        """แยกคำค้นหาจากคำสั่ง"""
         if "ค้นหา" not in text.lower() and "search" not in text.lower():
             return None
         query = text.lower().replace("เปิด", "").replace("ค้นหา", "").strip()
@@ -397,14 +382,12 @@ class SmartCommandParser:
 
 class AssistantCore(QObject):
     """
-    🧠 Core System ของ AI Assistant
-    จัดการการประมวลผลคำสั่งทั้งหมดและประสานงานระหว่าง modules
+    🧠 Core System ของ AI Assistant (Full Version with Complete Vision)
     """
     
-    # สัญญาณต่างๆ สำหรับการสื่อสารกับ GUI
-    status_updated = pyqtSignal(str)          # อัพเดทสถานะ
-    response_ready = pyqtSignal(str)          # ส่งการตอบกลับ
-    voice_input_received = pyqtSignal(str)    # แสดงข้อความจากเสียง
+    status_updated = pyqtSignal(str)
+    response_ready = pyqtSignal(str)
+    voice_input_received = pyqtSignal(str)
     
     def __init__(self):
         super().__init__()
@@ -413,44 +396,81 @@ class AssistantCore(QObject):
     def setup_core_systems(self):
         """ตั้งค่าระบบทั้งหมด"""
         try:
-            # ตั้งค่า core modules
-            self.llm = LLMClient()                    # AI Language Model
-            self.stt = STTClient(model_size="medium", language="th")  # Speech-to-Text
-            self.tts = TTSClient(lang="th")           # Text-to-Speech  
-            self.vision = VisionSystem()              # Vision Analysis
-            self.parser = CommandParser(llm_client=self.llm)  # Command Parser
-            self.executor = AutomationExecutor(monitor=1)     # Automation
-            self.launcher = AppLauncher()             # App Launcher
-            self.smart_launcher = SmartAppLauncher()  # Smart App Launcher
+            # Core modules
+            self.llm = LLMClient()
+            self.stt = STTClient(model_size="medium", language="th")
+            self.tts = TTSClient(lang="th")
+            self.vision = VisionSystem()
+            self.parser = CommandParser(llm_client=self.llm)
+            self.executor = AutomationExecutor(monitor=1)
+            self.launcher = AppLauncher()
+            self.smart_launcher = SmartAppLauncher()
             
-            # ตั้งค่า systems เพิ่มเติม
-            self.context = AssistantContext()         # Context Memory
-            self.command_parser = SmartCommandParser(llm_client=self.llm)  # Smart Parser
+            # Additional systems
+            self.context = AssistantContext()
+            self.command_parser = SmartCommandParser(llm_client=self.llm)
             
-            # ตั้งค่า Voice Recorder สำหรับ Push-to-Talk
+            # Voice Recorder
             self.voice_recorder = VoiceRecorder(self.stt)
             self.voice_recorder.recording_stopped.connect(self.on_audio_recorded)
             
-            # ประวัติการสนทนา
+            # Chat history
             self.chat_history = [{
                 "role": "system", 
                 "content": "คุณคือผู้ช่วยที่ตอบเป็นภาษาไทยอย่างเป็นมิตรและเป็นธรรมชาติ"
             }]
             
-            # ตั้งค่า Hotkey Listener (ปุ่ม F4)
+            # Hotkey Listener
             self.hotkey_listener = HotkeyListener(
                 callback_start=self.handle_voice_f4,
                 hotkey="f4",
                 cooldown=2.0
             )
             
+            # ✅ Setup Vision Systems
+            self.setup_vision_systems()
+            
             self.status_updated.emit("ระบบพร้อมใช้งาน ✅")
-            print("=== 🤖 AI Assistant (Complete with Copilot Vision) ===")
+            print("=== 🤖 AI Assistant (Complete with Full Copilot Vision) ===")
             
         except Exception as e:
             error_msg = f"ข้อผิดพลาดในการตั้งค่าระบบ: {str(e)}"
             self.status_updated.emit(error_msg)
             print(f"Error setting up systems: {e}")
+
+    def setup_vision_systems(self):
+        """ตั้งค่าระบบ Vision ครบชุด"""
+        if not _HAS_VISION_SYSTEMS:
+            print("[Vision] ⚠️ Vision Systems ไม่พร้อม - ข้าม")
+            self.vision_overlay = None
+            self.continuous_vision = None
+            self.interactive_panel = None
+            return
+            
+        try:
+            # 1️⃣ Vision Overlay
+            self.vision_overlay = VisionOverlay()
+            self.vision_overlay.clicked.connect(self.on_overlay_clicked)
+            print("[Vision] ✅ Overlay System")
+            
+            # 2️⃣ Continuous Vision
+            self.continuous_vision = ContinuousVisionSystem(
+                llm_client=self.llm,
+                monitor=1
+            )
+            self.continuous_vision.analysis_ready.connect(self.on_continuous_analysis)
+            self.continuous_vision.change_detected.connect(self.on_screen_change)
+            print("[Vision] ✅ Continuous System")
+            
+            # 3️⃣ Interactive Vision Panel
+            self.interactive_panel = None  # สร้างตอนใช้งาน
+            print("[Vision] ✅ Interactive System (standby)")
+            
+        except Exception as e:
+            print(f"[Vision] ❌ Setup Error: {e}")
+            self.vision_overlay = None
+            self.continuous_vision = None
+            self.interactive_panel = None
 
     # =====================================================
     # 🎤 Voice Recording Methods
@@ -458,90 +478,199 @@ class AssistantCore(QObject):
     
     @pyqtSlot()
     def start_recording(self):
-        """เริ่มบันทึกเสียง (เมื่อกดปุ่มไมค์)"""
         print("[AssistantCore] 🎤 เริ่มบันทึกเสียง...")
         self.status_updated.emit("🔴 กำลังฟัง...")
         self.voice_recorder.start_recording()
     
     @pyqtSlot()
     def stop_recording(self):
-        """หยุดบันทึกเสียง (เมื่อปล่อยปุ่มไมค์)"""
         print("[AssistantCore] ⏹️ หยุดบันทึกเสียง")
         self.status_updated.emit("⏳ กำลังประมวลผล...")
         self.voice_recorder.stop_recording()
     
     @pyqtSlot(object)
     def on_audio_recorded(self, audio_data):
-        """เมื่อได้ข้อมูลเสียงแล้ว → แปลงเป็นข้อความ"""
         if audio_data is None or len(audio_data) == 0:
             self.status_updated.emit("❌ ไม่มีเสียง")
             self.tts.speak("ขอโทษครับ ผมไม่ได้ยินเสียง")
             return
         
-        # สร้าง worker thread สำหรับแปลงเสียง
         self.transcription_worker = TranscriptionWorker(self.stt, audio_data)
         self.transcription_worker.transcription_done.connect(self.on_transcription_done)
         self.transcription_worker.start()
     
     @pyqtSlot(str)
     def on_transcription_done(self, text: str):
-        """เมื่อแปลงเสียงเป็นข้อความเสร็จแล้ว"""
         if not text or text.strip() == "":
             self.status_updated.emit("❌ ไม่เข้าใจ")
             self.tts.speak("ขอโทษครับ ผมไม่เข้าใจ")
             return
         
         print(f"📝 คุณพูดว่า: {text}")
-        
-        # แสดงข้อความจากเสียงใน GUI
         self.voice_input_received.emit(text)
         self.response_ready.emit(f"📝 คุณพูดว่า: {text}")
-        
-        # ประมวลผลคำสั่ง
         self.process_command(text)
 
     # =====================================================
-    # 🛑 Stop Speaking Method
+    # 🛑 Stop Speaking
     # =====================================================
     
     @pyqtSlot()
     def stop_speaking(self):
-        """
-        หยุดการพูดปัจจุบัน
-        ทำงานกับ TTS Client ที่รองรับการหยุด
-        """
         print("[AssistantCore] ⏹️ กำลังหยุดการพูด...")
-        
-        # อัพเดท UI ทันที
         self.status_updated.emit("หยุดการพูดแล้ว")
         self.response_ready.emit("⏹️ หยุดการพูดแล้ว")
         
         try:
-            # พยายามหยุด TTS
             if hasattr(self.tts, 'stop_speaking'):
-                success = self.tts.stop_speaking()
-                if success:
-                    print("[AssistantCore] ✅ หยุดการพูดสำเร็จ")
-                else:
-                    print("[AssistantCore] ❌ หยุดการพูดไม่สำเร็จ")
+                self.tts.stop_speaking()
             else:
-                # วิธีสำรอง: สร้าง TTS ใหม่
-                print("[AssistantCore] 🔄 รีสตาร์ทระบบเสียง...")
                 self.tts = TTSClient(lang="th")
-                print("[AssistantCore] ✅ หยุดการพูดสำเร็จ (วิธีสำรอง)")
-                
         except Exception as e:
-            error_msg = f"❌ ข้อผิดพลาดในการหยุดพูด: {str(e)}"
-            print(f"[AssistantCore] {error_msg}")
+            print(f"[AssistantCore] ❌ Stop Error: {e}")
 
     # =====================================================
-    # 🧠 Copilot Vision Methods
+    # 🎨 Vision Overlay Methods
+    # =====================================================
+    
+    def show_ui_hints(self, elements):
+        """แสดงกรอบชี้ UI elements"""
+        if not self.vision_overlay:
+            print("[Vision] ⚠️ Vision Overlay ไม่พร้อม")
+            return
+            
+        self.vision_overlay.clear_annotations()
+        
+        for elem in elements:
+            self.vision_overlay.add_box(
+                elem["x"], elem["y"], elem["w"], elem["h"],
+                label=elem.get("label", ""),
+                color=QColor(100, 255, 100, 200)
+            )
+        
+        self.vision_overlay.show_temporary(duration_ms=5000)
+        print(f"[Vision] 🎨 แสดง {len(elements)} elements")
+    
+    @pyqtSlot(int, int)
+    def on_overlay_clicked(self, x, y):
+        print(f"[Vision] 👆 คลิกที่ ({x}, {y})")
+        self.response_ready.emit(f"🖱️ คลิกที่ตำแหน่ง ({x}, {y})")
+
+    # =====================================================
+    # 👁️ Continuous Vision Methods
+    # =====================================================
+    
+    def start_continuous_vision(self, interval=5):
+        if not self.continuous_vision:
+            print("[Vision] ⚠️ Continuous Vision ไม่พร้อม")
+            self.status_updated.emit("❌ Continuous Vision ไม่พร้อม")
+            return
+            
+        self.continuous_vision.start(interval_seconds=interval)
+        self.status_updated.emit(f"🔄 Continuous Vision (ทุก {interval}s)")
+        self.tts.speak(f"เริ่มวิเคราะห์หน้าจอทุก {interval} วินาที")
+    
+    def stop_continuous_vision(self):
+        if not self.continuous_vision:
+            return
+            
+        self.continuous_vision.stop()
+        self.status_updated.emit("⏸️ หยุด Continuous Vision")
+        self.tts.speak("หยุดการวิเคราะห์แล้ว")
+    
+    @pyqtSlot(str)
+    def on_continuous_analysis(self, analysis):
+        print(f"[ContinuousVision] 🤖 {analysis[:100]}...")
+        self.response_ready.emit(f"🔄 {analysis}")
+    
+    @pyqtSlot(float, str)
+    def on_screen_change(self, percent, description):
+        print(f"[ContinuousVision] 🔔 เปลี่ยนแปลง {percent:.1f}%")
+        self.response_ready.emit(f"🔔 หน้าจอเปลี่ยนแปลง {percent:.1f}%")
+
+    # =====================================================
+    # 🖱️ Interactive Vision Methods
+    # =====================================================
+    
+    def open_interactive_vision(self):
+        if not _HAS_VISION_SYSTEMS:
+            print("[Vision] ⚠️ Interactive Vision ไม่พร้อม")
+            self.status_updated.emit("❌ Interactive Vision ไม่พร้อม")
+            return
+            
+        if self.interactive_panel is None:
+            self.interactive_panel = InteractiveVisionPanel()
+            self.interactive_panel.point_selected.connect(self.on_point_selected)
+            self.interactive_panel.region_selected.connect(self.on_region_selected)
+            self.interactive_panel.close_requested.connect(
+                lambda: self.interactive_panel.hide()
+            )
+        
+        self.interactive_panel.show()
+        self.status_updated.emit("🖱️ Interactive Vision Mode")
+        print("[Vision] 🖱️ เปิดโหมด Interactive")
+    
+    @pyqtSlot(int, int, str)
+    def on_point_selected(self, x, y, mode):
+        print(f"[InteractiveVision] 👆 ({x}, {y}) - {mode}")
+        
+        data_uri, _, img = screenshot_data_uri(monitor=1)
+        
+        prompts = {
+            "อธิบาย": f"อธิบายสิ่งที่อยู่รอบๆ ตำแหน่ง ({x}, {y}) บนหน้าจอนี้",
+            "วิเคราะห์": f"วิเคราะห์ว่าสิ่งที่อยู่ตำแหน่ง ({x}, {y}) มีความหมายอย่างไร",
+            "แนะนำ": f"แนะนำว่าควรทำอะไรกับสิ่งที่อยู่ตำแหน่ง ({x}, {y})",
+            "หา Element": f"ระบุว่าสิ่งที่อยู่ตำแหน่ง ({x}, {y}) คือ UI element ประเภทใด",
+            "ทำงาน": f"แนะนำคำสั่งที่ใช้โต้ตอบกับสิ่งที่อยู่ตำแหน่ง ({x}, {y})"
+        }
+        
+        prompt = prompts.get(mode, prompts["อธิบาย"])
+        
+        self.status_updated.emit(f"🔍 กำลังวิเคราะห์ ({x}, {y})...")
+        reply = self.llm.ask_with_image(prompt, data_uri)
+        
+        self.response_ready.emit(f"🤖 [{mode}] {reply}")
+        self.tts.speak(reply)
+        
+        if self.vision_overlay:
+            self.vision_overlay.clear_annotations()
+            self.vision_overlay.add_text(x + 10, y - 10, "👆 คุณคลิกที่นี่")
+            self.vision_overlay.show_temporary(3000)
+    
+    @pyqtSlot(int, int, int, int, str)
+    def on_region_selected(self, x, y, w, h, mode):
+        print(f"[InteractiveVision] 📦 ({x}, {y}, {w}, {h}) - {mode}")
+        
+        region = (x, y, w, h)
+        data_uri, _, img = screenshot_data_uri(region=region, monitor=1)
+        
+        prompts = {
+            "อธิบาย": "อธิบายสิ่งที่เห็นในภาพนี้อย่างละเอียด",
+            "วิเคราะห์": "วิเคราะห์เนื้อหาในภาพนี้ และบอกความหมาย",
+            "แนะนำ": "แนะนำว่าควรทำอะไรกับสิ่งที่เห็นในภาพนี้",
+            "หา Element": "ระบุ UI elements ทั้งหมดที่เห็นในภาพนี้",
+            "ทำงาน": "แนะนำขั้นตอนการทำงานกับสิ่งที่เห็นในภาพนี้"
+        }
+        
+        prompt = prompts.get(mode, prompts["อธิบาย"])
+        
+        self.status_updated.emit(f"🔍 กำลังวิเคราะห์พื้นที่ {w}x{h}px...")
+        reply = self.llm.ask_with_image(prompt, data_uri)
+        
+        self.response_ready.emit(f"🤖 [{mode}] {reply}")
+        self.tts.speak(reply)
+        
+        if self.vision_overlay:
+            self.vision_overlay.clear_annotations()
+            self.vision_overlay.add_box(x, y, w, h, f"{w}x{h}px")
+            self.vision_overlay.show_temporary(5000)
+
+    # =====================================================
+    # 🧠 Copilot Vision (Original)
     # =====================================================
     
     def open_vision_panel(self, assistant_bar):
-        """
-        เปิดหน้าต่างเลือกหน้าจอสำหรับ Copilot Vision
-        """
+        """เปิดหน้าต่างเลือกหน้าจอสำหรับ Copilot Vision"""
         if not _HAS_MSS:
             self.status_updated.emit("❌ ต้องการติดตั้ง mss: pip install mss")
             self.tts.speak("ขอโทษครับ ระบบวิเคราะห์ภาพยังไม่พร้อมใช้งาน")
@@ -555,23 +684,18 @@ class AssistantCore(QObject):
         print("[Vision] เปิดหน้าต่างเลือกหน้าจอ")
 
     def share_screen_to_ai(self, monitor_id, description, assistant_bar):
-        """
-        จับภาพหน้าจอแล้วให้ AI วิเคราะห์
-        """
+        """จับภาพหน้าจอแล้วให้ AI วิเคราะห์"""
         assistant_bar.status_label.setText(f"📡 กำลังแชร์ {description} ให้ AI...")
         try:
-            # ใช้ vision system วิเคราะห์ภาพ
             reply = self.vision.ask_with_screenshot(
                 f"อธิบายสิ่งที่เห็นบน {description} ให้ละเอียดเป็นภาษาไทย",
                 monitor=monitor_id
             )
             
-            # แสดงผลลัพธ์
             assistant_bar.show_ai_response(f"🤖 [Vision-{monitor_id}]: {reply}")
             self.tts.speak(reply)
             assistant_bar.status_label.setText(f"✅ วิเคราะห์ {description} สำเร็จ")
             
-            # บันทึกใน context
             self.context.record_command(f"vision share {description}", "วิเคราะห์ภาพสำเร็จ")
             
         except Exception as e:
@@ -581,11 +705,11 @@ class AssistantCore(QObject):
             print(f"[Vision Error] {e}")
 
     # =====================================================
-    # 🎯 Command Processing Methods
+    # 🎯 Command Processing
     # =====================================================
     
     def handle_voice_f4(self):
-        """จัดการคำสั่งเสียงจาก F4 (แบบเดิม - อัด 5 วินาที)"""
+        """จัดการคำสั่งเสียงจาก F4"""
         try:
             self.status_updated.emit("กำลังฟัง...")
             print("🎤 [F4] กำลังอัดเสียง 5 วินาที...")
@@ -599,15 +723,11 @@ class AssistantCore(QObject):
 
             print(f"📝 คุณพูดว่า: {user_input}")
             
-            # ตรวจสอบ Context Memory
             context_suggestion = self.context.get_smart_suggestion(user_input)
             if "เคย" in context_suggestion:
                 print(f"🧠 [Context] {context_suggestion}")
             
-            # แสดงข้อความจากเสียงใน GUI
             self.voice_input_received.emit(user_input)
-            
-            # ส่งคำสั่งเสียงไปประมวลผล
             self.process_command(user_input)
             
         except Exception as e:
@@ -618,26 +738,58 @@ class AssistantCore(QObject):
     
     @pyqtSlot(str)
     def process_command(self, command: str):
-        """ประมวลผลคำสั่งจาก GUI หรือ Voice"""
+        """ประมวลผลคำสั่งทั้งหมด"""
         try:
             self.status_updated.emit("กำลังประมวลผล...")
+            cmd_lower = command.lower()
             
             # คำสั่งออกจากโปรแกรม
-            if command.lower() in ["exit", "quit", "q"]:
+            if cmd_lower in ["exit", "quit", "q"]:
                 self.tts.speak("ลาก่อนครับ")
                 self.status_updated.emit("กำลังปิดโปรแกรม...")
                 QApplication.instance().quit()
                 return
             
-            # แสดง Context Summary
-            if command.lower() in ["context", "ประวัติ", "history"]:
+            # แสดง Context
+            if cmd_lower in ["context", "ประวัติ", "history"]:
                 summary = self.context.get_context_summary()
                 self.response_ready.emit(f"🧠 [Context Memory] {summary}")
                 self.tts.speak(f"สรุปกิจกรรมล่าสุด: {summary}")
                 self.status_updated.emit("แสดงประวัติเรียบร้อย")
                 return
             
-            # ตรวจจับคำสั่งเปิดโปรแกรม
+            # ✅ คำสั่ง Vision Systems
+            if "continuous vision" in cmd_lower or "วิเคราะห์ต่อเนื่อง" in cmd_lower:
+                if "start" in cmd_lower or "เริ่ม" in cmd_lower:
+                    self.start_continuous_vision(interval=5)
+                elif "stop" in cmd_lower or "หยุด" in cmd_lower:
+                    self.stop_continuous_vision()
+                return
+            
+            if "interactive vision" in cmd_lower or "โหมดโต้ตอบ" in cmd_lower:
+                self.open_interactive_vision()
+                return
+            
+            if "show hints" in cmd_lower or "แสดงคำแนะนำ" in cmd_lower:
+                from core.ui_detector import UIDetector
+                detector = UIDetector(monitor=1)
+                elements = detector.find_all_text()[:10]
+                
+                hints = []
+                for elem in elements:
+                    hints.append({
+                        "x": elem["x"],
+                        "y": elem["y"],
+                        "w": elem["w"],
+                        "h": elem["h"],
+                        "label": elem["text"][:20]
+                    })
+                
+                self.show_ui_hints(hints)
+                self.response_ready.emit(f"✅ แสดง {len(hints)} UI elements")
+                return
+            
+            # คำสั่งเปิดโปรแกรม
             if self.command_parser.is_open_command(command):
                 result = self.smart_app_launch(command)
                 
@@ -652,12 +804,12 @@ class AssistantCore(QObject):
                 return
             
             # Vision Mode
-            if command.lower().startswith("vision"):
+            if cmd_lower.startswith("vision"):
                 self.process_vision_command(command)
                 return
             
-            # ตรวจจับคำสั่ง Automation
-            if any(word in command.lower() for word in ["คลิก", "พิมพ์", "กด", "เลื่อน", "ปุ่ม"]):
+            # Automation
+            if any(word in cmd_lower for word in ["คลิก", "พิมพ์", "กด", "เลื่อน", "ปุ่ม"]):
                 self.process_automation_command(command)
                 return
             
@@ -672,7 +824,7 @@ class AssistantCore(QObject):
             print(f"[ERROR] {e}")
     
     def smart_app_launch(self, raw_command: str) -> dict:
-        """ระบบเปิดแอปอัจฉริยะแบบใหม่"""
+        """ระบบเปิดแอปอัจฉริยะ"""
         print(f"🚀 กำลังประมวลผล: '{raw_command}'")
         
         app_name = self.command_parser.extract_app_name_from_command(raw_command)
@@ -687,7 +839,6 @@ class AssistantCore(QObject):
         
         result = self.smart_launcher.launch(app_name)
         
-        # Fallback ระบบหากเปิดไม่สำเร็จ
         if not result["ok"] and (url or search_query):
             print(f"[Smart Fallback] เปิด URL ผ่านเบราว์เซอร์...")
             browser = "chrome"
@@ -701,7 +852,6 @@ class AssistantCore(QObject):
             print(f"[Smart Fallback] ใช้ AppLauncher ลองอีกครั้ง...")
             result = self.launcher.launch(app_name)
         
-        # บันทึกใน context
         self.context.record_app_launch(app_name, result["ok"])
         self.context.record_command(f"เปิด {app_name}", 
                                  "สำเร็จ" if result["ok"] else "ล้มเหลว")
@@ -782,7 +932,7 @@ class AssistantCore(QObject):
 
 
 def main():
-    """ฟังก์ชันหลักแบบ GUI - รวมทุกฟีเจอร์"""
+    """ฟังก์ชันหลัก - Full Version"""
     app = QApplication(sys.argv)
     
     # สร้าง core system
@@ -791,48 +941,58 @@ def main():
     # สร้าง GUI
     assistant_bar = AssistantBar()
     
-    # =====================================================
-    # 🔗 การเชื่อมต่อสัญญาณทั้งหมด
-    # =====================================================
-    
-    # การอัพเดทสถานะและแสดงผล
+    # เชื่อมต่อสัญญาณ
     assistant_core.status_updated.connect(assistant_bar.status_label.setText)
     assistant_core.response_ready.connect(lambda text: print(f"🤖: {text}"))
     assistant_core.voice_input_received.connect(assistant_bar.show_voice_input)
-    
-    # ป้องกันการพูดซ้ำ
     assistant_core.response_ready.connect(
         lambda text: assistant_bar.show_ai_response(text, speak=False)
     )
     
-    # การเชื่อมต่อจาก GUI ไปยัง Core
     assistant_bar.text_submitted.connect(assistant_core.process_command)
     assistant_bar.close_requested.connect(app.quit)
     assistant_bar.mic_pressed.connect(assistant_core.start_recording)
     assistant_bar.mic_released.connect(assistant_core.stop_recording)
     assistant_bar.stop_speaking_requested.connect(assistant_core.stop_speaking)
     
-    # ✅ การเชื่อมต่อ Copilot Vision
-    # หมายเหตุ: ต้องเพิ่มปุ่มใน GUI เพื่อเรียกใช้ assistant_core.open_vision_panel(assistant_bar)
+    # ✅ เพิ่มปุ่ม Vision ครบชุด
+    assistant_bar.add_extra_button(
+        "🧠 Copilot",
+        lambda: assistant_core.open_vision_panel(assistant_bar)
+    )
+    
+    if _HAS_VISION_SYSTEMS:
+        assistant_bar.add_extra_button(
+            "🔄 Continuous",
+            lambda: assistant_core.start_continuous_vision(5)
+        )
+        
+        assistant_bar.add_extra_button(
+            "🖱️ Interactive",
+            lambda: assistant_core.open_interactive_vision()
+        )
+        
+        assistant_bar.add_extra_button(
+            "🎨 Hints",
+            lambda: assistant_core.process_command("show hints")
+        )
     
     # เริ่มต้นระบบ
     assistant_core.hotkey_listener.start()
     assistant_bar.show()
-    # ✅ เพิ่มปุ่ม Copilot Vision ใน AssistantBar
-    assistant_bar.add_extra_button("🧠 Copilot Vision", lambda: assistant_core.open_vision_panel(assistant_bar))
-
+    
     # แสดงคำแนะนำ
-    print("=" * 60)
-    print("=== 🤖 AI Assistant (Complete with Copilot Vision) ===")
-    print("=" * 60)
-    print("✅ กดค้างปุ่มไมค์เพื่อพูด (Push-to-Talk)")
-    print("✅ กด F4 เพื่ออัดเสียง 5 วินาที")
-    print("✅ พิมพ์คำสั่งแล้วกด Enter")
-    print("✅ มีปุ่มหยุดพูดและปิดโปรแกรม")
-    if _HAS_MSS:
-        print("✅ Copilot Vision พร้อมใช้งาน (ต้องการปุ่มใน GUI)")
-    else:
-        print("⚠️  ติดตั้ง mss สำหรับ Copilot Vision: pip install mss")
+    print("=" * 70)
+    print("=== 🤖 AI Assistant with Full Copilot Vision ===")
+    print("=" * 70)
+    print("✅ 🧠 Copilot - เลือกหน้าจอเพื่อวิเคราะห์")
+    if _HAS_VISION_SYSTEMS:
+        print("✅ 🔄 Continuous - วิเคราะห์หน้าจอต่อเนื่อง")
+        print("✅ 🖱️ Interactive - คลิก/ลากเพื่อถาม AI")
+        print("✅ 🎨 Hints - แสดงกรอบ UI elements")
+    print("✅ 🎤 Push-to-Talk - กดค้างไมค์เพื่อพูด")
+    print("✅ ⌨️ F4 - อัดเสียง 5 วินาที")
+    print("=" * 70)
     
     assistant_core.status_updated.emit("พร้อมใช้งาน ✅")
     sys.exit(app.exec())
